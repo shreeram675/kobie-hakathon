@@ -23,6 +23,24 @@ from schemas import ExtractedField, ExtractedObjectPacket, SemanticChunk
 
 VALID_STATUSES = {"EXTRACTED", "NOT_FOUND", "AMBIGUOUS"}
 TRANSIENT_GEMINI_STATUS_CODES = {429, 500, 502, 503, 504}
+
+# Source types that originate from financial/IR filings (annual reports, 10-K, prospectuses).
+# Chunks from these sources are deprioritised for consumer-facing fields because they use
+# loyalty vocabulary in an accounting context (breakage, deferred revenue, rooms/properties).
+_FINANCIAL_SOURCE_TYPES = frozenset({"financial", "ir_filing"})
+
+# Fields that should rarely or never be answered from financial/IR source text.
+# A membership_count from an IR filing is valid only when the text explicitly names members;
+# the penalty below reduces score but does not eliminate these chunks entirely.
+_CONSUMER_FACING_FIELDS = frozenset({
+    "program_basics.geography",
+    "earn_mechanics.non_transactional_earn",
+    "digital_experience.gamification_features",
+    "digital_experience.app_ratings",
+    "member_sentiment.ratings",
+    "member_sentiment.common_praise",
+    "member_sentiment.common_complaints",
+})
 DERIVABLE_SIGNAL_KEYWORDS = {
     "member",
     "members",
@@ -372,6 +390,15 @@ def score_chunk_for_schema(
             if any(keyword in text for keyword in _field_keywords(field)):
                 matched_fields += 1
     score += min(matched_fields, 4)
+
+    # Financial/IR sources use loyalty vocabulary in an accounting context. Penalise
+    # these chunks so consumer-facing evidence (review/official/faq) wins on score.
+    if getattr(chunk, "source_type", None) in _FINANCIAL_SOURCE_TYPES:
+        active_fields = set(_all_field_names(schema_config))
+        consumer_overlap = _CONSUMER_FACING_FIELDS & active_fields
+        if consumer_overlap:
+            score -= 2
+
     return score
 
 

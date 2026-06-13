@@ -337,11 +337,20 @@ def select_urls_for_firecrawl(urls) -> list:
     financial, and competitive queries instead of only official pages. Query
     groups are interleaved by source type so each source class survives a
     budget smaller than the query count.
+
+    A hard floor of MIN_CONSUMER_URLS is reserved for consumer-facing source types
+    (review / forum / app_reviews) so sentiment and app-ratings evidence always
+    reaches the extraction stage regardless of Tavily relevance scores.
     """
 
     max_urls = _env_int("MAX_FIRECRAWL_URLS", 12)
     if max_urls <= 0 or len(urls) <= max_urls:
         return list(urls)
+
+    # Source types that carry consumer evidence (sentiment, app ratings, forum threads).
+    _CONSUMER_SOURCE_TYPES = frozenset({"review", "forum", "forums", "app_reviews"})
+    # Reserve slots proportional to budget (1 per 6 URLs, min 0 so tiny budgets are unaffected).
+    min_consumer = max_urls // 6
 
     priority = {
         "official": 0,
@@ -361,8 +370,24 @@ def select_urls_for_firecrawl(urls) -> list:
     def url_rank(item):
         return (priority.get(str(item.source_type).lower(), 50), -float(item.score or 0))
 
+    # Split pool into consumer and non-consumer early so the floor can be enforced.
+    consumer_pool = sorted(
+        [u for u in urls if str(u.source_type).lower() in _CONSUMER_SOURCE_TYPES],
+        key=url_rank,
+    )
+    non_consumer_pool = [u for u in urls if str(u.source_type).lower() not in _CONSUMER_SOURCE_TYPES]
+
+    # Reserve up to min_consumer slots from the consumer pool.
+    reserved_consumer = consumer_pool[:min_consumer]
+    remaining_consumer = consumer_pool[min_consumer:]
+
+    # Fill the non-reserved budget using the existing round-robin logic over non-consumer
+    # URLs plus any overflow consumer URLs.
+    remaining_budget = max_urls - len(reserved_consumer)
+    candidates = non_consumer_pool + remaining_consumer
+
     groups: dict[str, list] = {}
-    for item in sorted(urls, key=url_rank):
+    for item in sorted(candidates, key=url_rank):
         groups.setdefault(str(item.query_id), []).append(item)
 
     groups_by_type: dict[str, list[list]] = {}
@@ -379,17 +404,18 @@ def select_urls_for_firecrawl(urls) -> list:
                 remaining_queues.append(queue)
         type_queues = remaining_queues
 
-    selected: list = []
-    while ordered_groups and len(selected) < max_urls:
+    round_robin_selected: list = []
+    while ordered_groups and len(round_robin_selected) < remaining_budget:
         remaining_groups = []
         for group in ordered_groups:
-            if len(selected) >= max_urls:
+            if len(round_robin_selected) >= remaining_budget:
                 break
-            selected.append(group.pop(0))
+            round_robin_selected.append(group.pop(0))
             if group:
                 remaining_groups.append(group)
         ordered_groups = remaining_groups
-    return selected
+
+    return reserved_consumer + round_robin_selected
 
 
 def _env_int(name: str, default: int) -> int:

@@ -63,6 +63,7 @@ def semantic_chunk(
 
     for document in documents:
         target_fields = target_fields_by_query_id.get(document.query_id or "", default_target_fields)
+        source_type = document.metadata.get("source_type") if document.metadata else None
         chunk_index = 0
         sections: list[str] = []
         for section in _split_on_headings(strip_boilerplate(document.content)):
@@ -77,6 +78,7 @@ def semantic_chunk(
                     chunk_text=part,
                     source_url=document.url,
                     target_fields=target_fields,
+                    source_type=source_type,
                 )
             )
             chunk_index += 1

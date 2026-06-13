@@ -101,9 +101,13 @@ REQUIRED RESEARCH VECTORS
 Generate coverage across all of these:
 1. Program Rules (T&C, FAQ)
 2. Earn Mechanics (base earn, bonus categories)
-3. Tier Structure (names, thresholds, qualification criteria)
+3. Tier Structure (names, thresholds, qualification criteria) — ONE query must target
+   the page that lists ALL tier levels together (e.g. "[program] elite status tiers all
+   levels overview"). Do NOT generate a query for a single tier page only.
 4. Redemption Value (cpp, award chart, thresholds)
-5. Consumer Partnerships (earn/burn/both, partner list)
+5. Consumer Partnerships (earn/burn/both, partner list) — ONE query must target a
+   dedicated partner list or transfer partner page (e.g. "[program] transfer partners
+   list" or "[program] airline hotel partners complete list").
 6. Recent Changes / Devaluations (last 12 months)
 7. Historical Identity / Rebrands / Mergers
 8. Membership Scale / Loyalty Liability
@@ -210,6 +214,8 @@ VALIDATION RULES checked by the calling system:
 - at least one query must target competitive position
 - at least one query must target financial/membership scale
 - at least one query must target the mobile app / digital experience
+- at least one query must target the complete tier structure listing ALL status levels
+- at least one query must target the transfer/exchange partner list or partner overview page
 """.strip()
 
 

@@ -16,6 +16,29 @@ from .extractor import SchemaConfig
 LOGGER = logging.getLogger(__name__)
 NUMERIC_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 
+# Matches "City, CC" pattern (e.g. "Dallas, US", "Mumbai, IN") — never a valid program scope.
+_CITY_COUNTRY_RE = re.compile(r"^[\w\s\-]+,\s*[A-Z]{2}$")
+
+# Non-member count nouns that appear in the same sentence as large numbers in IR filings.
+_NON_MEMBER_COUNT_RE = re.compile(
+    r"\b(rooms?|propert(?:y|ies)|hotels?|stores?|branch(?:es)?|ATMs?|fleet|"
+    r"destinations?|flights?|aircraft|outlets?|locations?)\b",
+    re.IGNORECASE,
+)
+
+# Phrases that describe ELITE STATUS validity, not point expiry.
+_STATUS_VALIDITY_RE = re.compile(
+    r"\b(calendar year in which you earned|valid for the rest of the calendar year|"
+    r"additional \d+ months after that|status is valid|earned it and an additional)\b",
+    re.IGNORECASE,
+)
+
+# Phrases that describe genuine POINT expiry (inactivity-based).
+_POINT_EXPIRY_RE = re.compile(
+    r"\b(inactiv|no earn|no burn|no activity|earning or redeeming|account activity)\b",
+    re.IGNORECASE,
+)
+
 
 def normalize_packet(packet: ExtractedObjectPacket, schema_config: SchemaConfig) -> NormalizedObjectPacket:
     """Normalize extracted values while preserving source evidence verbatim."""
@@ -23,9 +46,8 @@ def normalize_packet(packet: ExtractedObjectPacket, schema_config: SchemaConfig)
     normalized_fields: dict[str, ExtractedField] = {}
     for field_name, field_value in packet.fields.items():
         if field_value.status == "EXTRACTED":
-            normalized_fields[field_name] = field_value.model_copy(
-                update={"value": _normalize_value(field_value.value)}
-            )
+            normalized = field_value.model_copy(update={"value": _normalize_value(field_value.value)})
+            normalized_fields[field_name] = _validate_extracted_field(field_name, normalized)
         else:
             normalized_fields[field_name] = field_value
 
@@ -92,4 +114,55 @@ def _normalize_value(value: Any) -> Any:
 
 def _stable_key(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=True, default=str)
+
+
+def _validate_extracted_field(field_name: str, field: ExtractedField) -> ExtractedField:
+    """Downgrade implausible extracted values to AMBIGUOUS before they enter the field report.
+
+    These rules fire on structural patterns that are universally wrong regardless of the
+    program being researched — they do not encode Marriott-specific knowledge.
+    """
+
+    if field.status != "EXTRACTED" or field.value is None:
+        return field
+
+    value_str = str(field.value).strip()
+    snippet = field.source_snippet or ""
+
+    if field_name == "program_basics.geography":
+        # A city+country-code pattern (e.g. "Dallas, US") is a member or property location,
+        # never the program's operational footprint.
+        if _CITY_COUNTRY_RE.match(value_str):
+            LOGGER.warning(
+                "geography value %r looks like a city location, not program scope — "
+                "downgrading to AMBIGUOUS",
+                value_str,
+            )
+            return field.model_copy(update={"status": "AMBIGUOUS", "confidence": 0.0})
+
+    elif field_name == "program_basics.membership_count":
+        # IR filings mention room/property/store counts alongside member counts.
+        # If the supporting snippet contains a non-member count noun, the extractor
+        # grabbed the wrong number.
+        if _NON_MEMBER_COUNT_RE.search(snippet):
+            LOGGER.warning(
+                "membership_count snippet contains non-member count noun — "
+                "downgrading value %r to AMBIGUOUS",
+                value_str,
+            )
+            return field.model_copy(update={"status": "AMBIGUOUS", "confidence": 0.0})
+
+    elif field_name == "burn_mechanics.expiry_policy":
+        # Elite status validity phrases appear on the same T&C pages as point expiry.
+        # If the snippet describes status duration without mentioning inactivity, it is
+        # the wrong validity concept.
+        if _STATUS_VALIDITY_RE.search(snippet) and not _POINT_EXPIRY_RE.search(snippet):
+            LOGGER.warning(
+                "expiry_policy snippet describes status validity, not point inactivity expiry — "
+                "downgrading value %r to AMBIGUOUS",
+                value_str,
+            )
+            return field.model_copy(update={"status": "AMBIGUOUS", "confidence": 0.0})
+
+    return field
 

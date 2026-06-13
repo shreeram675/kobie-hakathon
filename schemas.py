@@ -234,6 +234,7 @@ class SemanticChunk(KobieModel):
     chunk_text: str
     source_url: str
     target_fields: list[str] = Field(default_factory=list)
+    source_type: str | None = None
 
 
 class ExtractedField(KobieModel):
