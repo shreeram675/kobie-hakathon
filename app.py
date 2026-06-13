@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
@@ -451,10 +452,618 @@ def render_node_results(state) -> None:
         else:
             st.info("No normalized packets yet.")
 
+    field_report = state.get("field_report")
+    with st.expander("Field Report (values + sources)", expanded=bool(field_report)):
+        if field_report:
+            st.caption(
+                f"{field_report.extracted_count} extracted, {field_report.ambiguous_count} ambiguous, "
+                f"{field_report.not_found_count} not found of {len(field_report.entries)} fields"
+            )
+            st.dataframe(
+                [
+                    {
+                        "field": entry.field_path,
+                        "status": entry.status,
+                        "value": "" if entry.value is None else str(entry.value),
+                        "sources": ", ".join(entry.source_urls),
+                        "snippet": entry.source_snippet or "",
+                        "confidence": entry.confidence,
+                    }
+                    for entry in field_report.entries
+                ],
+                use_container_width=True,
+            )
+        else:
+            st.info("No field report yet.")
+
+    adjudicated = state.get("adjudicated", [])
+    with st.expander("Conflict Adjudication Result", expanded=bool(adjudicated)):
+        if adjudicated:
+            st.caption(f"{len(adjudicated)} adjudication entries (auto, debate, or flagged)")
+            st.dataframe(
+                [
+                    {
+                        "field": entry.get("field_name"),
+                        "resolution": entry.get("resolution"),
+                        "winner": entry.get("winner"),
+                        "value": entry.get("value"),
+                        "source": entry.get("source_url"),
+                        "confidence": entry.get("confidence"),
+                        "deciding factor": entry.get("deciding_factor"),
+                        "reasoning": entry.get("reasoning"),
+                    }
+                    for entry in adjudicated
+                ],
+                use_container_width=True,
+            )
+            debates = [entry["debate"] for entry in adjudicated if entry.get("debate")]
+            if debates:
+                st.caption("Debate transcripts")
+                st.json(debates)
+        else:
+            st.info("No conflicting claims between sources.")
+
     with st.expander("Focused Extraction Schema", expanded=False):
         fields = all_default_field_paths()
         st.caption(f"{len(fields)} required fields from the selected report schema")
         st.json(fields)
+
+
+# ── Pipeline Inspector helpers ───────────────────────────────────────────────
+
+_INSPECTOR_CONFIG_DEFAULTS = {
+    "MAX_FIRECRAWL_URLS": 12,
+    "MAX_EXTRACTION_CHUNKS": 30,
+    "EXTRACTION_BATCH_WORDS": 4000,
+    "MIN_EXTRACTION_CHUNK_SCORE": 2,
+}
+
+_INSPECTOR_STAGES = [
+    "input_validator",
+    "query_generator",
+    "retrieval",
+    "firecrawl_scraper",
+    "ingest",
+    "adjudication",
+]
+
+_INSPECTOR_STAGE_LABELS = {
+    "input_validator": "1. Input Validator",
+    "query_generator": "2. Query Generator",
+    "retrieval": "3. Tavily Retrieval",
+    "firecrawl_scraper": "4. Firecrawl Scraper",
+    "ingest": "5. Ingest  (Store → Chunk → Extract → Normalize)",
+    "adjudication": "6. Conflict Adjudication",
+}
+
+
+def _inspector_init() -> None:
+    if "inspector_state" not in st.session_state:
+        st.session_state.inspector_state = None
+    if "inspector_snaps" not in st.session_state:
+        st.session_state.inspector_snaps = {}
+    if "inspector_edited_queries" not in st.session_state:
+        st.session_state.inspector_edited_queries = None
+    if "inspector_selected_urls" not in st.session_state:
+        st.session_state.inspector_selected_urls = None
+    if "inspector_config" not in st.session_state:
+        st.session_state.inspector_config = dict(_INSPECTOR_CONFIG_DEFAULTS)
+    if "_inspector_input" not in st.session_state:
+        st.session_state["_inspector_input"] = ""
+
+
+def _safe_json(value):
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, list):
+        return [_safe_json(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _safe_json(v) for k, v in value.items()}
+    return value
+
+
+def _pick(state, *keys):
+    return {k: _safe_json(state.get(k)) for k in keys if state.get(k) is not None}
+
+
+def _apply_inspector_config() -> None:
+    for key, value in st.session_state.inspector_config.items():
+        os.environ[key] = str(value)
+
+
+def _snap_done(node: str) -> bool:
+    return node in st.session_state.get("inspector_snaps", {})
+
+
+def _can_run(node: str) -> bool:
+    state = st.session_state.get("inspector_state") or {}
+    if node == "input_validator":
+        return bool(st.session_state.get("_inspector_input", "").strip())
+    if node == "query_generator":
+        r = state.get("validation_result")
+        return bool(r and r.status == "resolved")
+    if node == "retrieval":
+        return bool(state.get("query_generation_result"))
+    if node == "firecrawl_scraper":
+        return bool(state.get("retrieval_result"))
+    if node == "ingest":
+        fc = state.get("firecrawl_result")
+        return bool(fc and fc.successful_scrapes > 0)
+    if node == "adjudication":
+        return bool(state.get("normalized_packets"))
+    return False
+
+
+def _run_inspector_stage(node: str) -> None:
+    from graph import (
+        adjudication_node,
+        firecrawl_node,
+        ingest_node,
+        input_validator_node,
+        query_generator_node,
+        retrieval_node,
+    )
+    from schemas import SearchQuery, build_initial_state, new_id
+
+    _apply_inspector_config()
+    state = st.session_state.inspector_state or {}
+
+    if node == "input_validator":
+        user_input = st.session_state.get("_inspector_input", "").strip()
+        fresh = build_initial_state(user_input)
+        fresh["validation_messages"] = [{"role": "user", "content": user_input}]
+        inp_snap: dict = {"user_input": user_input}
+        delta = input_validator_node(fresh)
+        new_state = {**fresh, **delta}
+        out_snap: dict = _pick(new_state, "validation_result", "program_identity", "errors")
+
+    elif node == "query_generator":
+        inp_snap = _pick(state, "program_identity")
+        delta = query_generator_node(state)
+        new_state = {**state, **delta}
+        out_snap = _pick(new_state, "query_generation_result", "search_queries", "errors")
+        if new_state.get("query_generation_result"):
+            st.session_state.inspector_edited_queries = list(new_state["query_generation_result"].queries)
+
+    elif node == "retrieval":
+        edited = st.session_state.get("inspector_edited_queries")
+        run_state = {**state, "search_queries": edited} if edited is not None else state
+        inp_snap = {
+            "query_count": len(run_state.get("search_queries", [])),
+            "queries": [{"query": q.query, "source_type": q.source_type} for q in run_state.get("search_queries", [])],
+        }
+        delta = retrieval_node(run_state)
+        new_state = {**run_state, **delta}
+        if new_state.get("retrieved_urls"):
+            st.session_state.inspector_selected_urls = [u.canonical_url for u in new_state["retrieved_urls"]]
+        out_snap = _pick(new_state, "retrieval_result", "retrieved_urls", "errors")
+
+    elif node == "firecrawl_scraper":
+        sel = st.session_state.get("inspector_selected_urls")
+        all_urls = state.get("retrieved_urls", [])
+        urls = [u for u in all_urls if u.canonical_url in set(sel)] if sel is not None else all_urls
+        run_state = {**state, "retrieved_urls": urls}
+        inp_snap = {
+            "url_count": len(urls),
+            "urls": [u.url for u in urls],
+            "MAX_FIRECRAWL_URLS": st.session_state.inspector_config.get("MAX_FIRECRAWL_URLS"),
+        }
+        delta = firecrawl_node(run_state)
+        new_state = {**run_state, **delta}
+        out_snap = _pick(new_state, "firecrawl_result", "errors")
+
+    elif node == "ingest":
+        cfg = st.session_state.inspector_config
+        inp_snap = {
+            "scraped_blocks": len(state.get("scraped_blocks", [])),
+            "program_name": state.get("program_name"),
+            "MAX_EXTRACTION_CHUNKS": cfg.get("MAX_EXTRACTION_CHUNKS"),
+            "EXTRACTION_BATCH_WORDS": cfg.get("EXTRACTION_BATCH_WORDS"),
+            "MIN_EXTRACTION_CHUNK_SCORE": cfg.get("MIN_EXTRACTION_CHUNK_SCORE"),
+        }
+        delta = ingest_node(state)
+        new_state = {**state, **delta}
+        out_snap = _pick(
+            new_state,
+            "raw_documents", "semantic_chunks", "extraction_chunks",
+            "extracted_packets", "normalized_packets", "field_report", "errors",
+        )
+
+    elif node == "adjudication":
+        inp_snap = {
+            "normalized_packets_count": len(state.get("normalized_packets", [])),
+            "conflicts_count": len(state.get("conflicts", [])),
+        }
+        delta = adjudication_node(state)
+        new_state = {**state, **delta}
+        out_snap = _pick(new_state, "adjudicated", "conflicts", "field_report", "errors")
+
+    else:
+        return
+
+    st.session_state.inspector_state = new_state
+    st.session_state.inspector_snaps[node] = {"input": inp_snap, "output": out_snap}
+
+
+def _inspector_stage_header(node: str) -> bool:
+    done = _snap_done(node)
+    runnable = _can_run(node)
+    state_text = "[DONE]" if done else ("[READY]" if runnable else "[LOCKED]")
+    label = _INSPECTOR_STAGE_LABELS[node]
+    c1, c2 = st.columns([6, 1])
+    with c1:
+        st.markdown(f"#### {state_text} {label}")
+    with c2:
+        clicked = st.button(
+            "Run",
+            key=f"insp_run_{node}",
+            disabled=not runnable,
+            type="primary" if (runnable and not done) else "secondary",
+        )
+    return clicked
+
+
+def _inspector_show_errors(snap: dict) -> None:
+    errors = (snap.get("output") or {}).get("errors") or []
+    for err in errors:
+        if isinstance(err, dict) and err.get("message"):
+            st.error(f"**{err.get('stage', 'error')}**: {err['message']}")
+
+
+def _inspector_io_columns(snap: dict, output_renderer=None) -> None:
+    c_in, c_out = st.columns(2)
+    with c_in:
+        with st.expander("Input", expanded=False):
+            st.json(snap["input"])
+    with c_out:
+        with st.expander("Output", expanded=True):
+            if output_renderer:
+                output_renderer()
+            else:
+                st.json(snap["output"])
+
+
+def render_inspector_tab() -> None:
+    _inspector_init()
+
+    # ── Config panel ─────────────────────────────────────────────────────────
+    with st.expander("Pipeline Configuration", expanded=False):
+        cfg = st.session_state.inspector_config
+        c1, c2, c3, c4 = st.columns(4)
+        cfg["MAX_FIRECRAWL_URLS"] = c1.number_input(
+            "Max Firecrawl URLs", min_value=1, max_value=25,
+            value=int(cfg["MAX_FIRECRAWL_URLS"]),
+            help="Scraping URL budget cap",
+        )
+        cfg["MAX_EXTRACTION_CHUNKS"] = c2.number_input(
+            "Max Extract Chunks", min_value=5, max_value=100,
+            value=int(cfg["MAX_EXTRACTION_CHUNKS"]),
+            help="Chunk count sent to Gemini",
+        )
+        cfg["EXTRACTION_BATCH_WORDS"] = c3.number_input(
+            "Batch Words", min_value=500, max_value=10000, step=500,
+            value=int(cfg["EXTRACTION_BATCH_WORDS"]),
+            help="Target words per Gemini extraction call",
+        )
+        cfg["MIN_EXTRACTION_CHUNK_SCORE"] = c4.number_input(
+            "Min Chunk Score", min_value=0, max_value=10,
+            value=int(cfg["MIN_EXTRACTION_CHUNK_SCORE"]),
+            help="Keyword score threshold for chunk selection",
+        )
+
+    col_run_all, col_reset, _ = st.columns([2, 2, 6])
+    with col_run_all:
+        if st.button("Run All Remaining Stages", type="primary"):
+            for stage in _INSPECTOR_STAGES:
+                if not _snap_done(stage) and _can_run(stage):
+                    _run_inspector_stage(stage)
+            st.rerun()
+    with col_reset:
+        if st.button("Reset Inspector"):
+            for key in ["inspector_state", "inspector_snaps", "inspector_edited_queries",
+                        "inspector_selected_urls", "_inspector_input"]:
+                st.session_state.pop(key, None)
+            st.rerun()
+
+    st.divider()
+
+    # ── Stage 1: Input Validator ─────────────────────────────────────────────
+    with st.container(border=True):
+        st.text_input("Program name", key="_inspector_input", placeholder="e.g. Marriott Bonvoy")
+        clicked = _inspector_stage_header("input_validator")
+        if clicked:
+            with st.spinner("Running Input Validator..."):
+                _run_inspector_stage("input_validator")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("input_validator")
+        if snap:
+            _inspector_show_errors(snap)
+
+            def _render_validator_out():
+                vr = (st.session_state.inspector_state or {}).get("validation_result")
+                if vr and vr.status == "resolved":
+                    identity = vr.identity
+                    st.success(
+                        f"**{identity.program_name}** — {identity.domain} — "
+                        f"confidence {vr.confidence:.2f}"
+                    )
+                elif vr and vr.status == "rejected":
+                    st.error(vr.reason or "Rejected")
+                elif vr:
+                    st.warning("Needs clarification")
+                st.json(snap["output"])
+
+            _inspector_io_columns(snap, _render_validator_out)
+
+    # ── Stage 2: Query Generator ─────────────────────────────────────────────
+    with st.container(border=True):
+        clicked = _inspector_stage_header("query_generator")
+        if clicked:
+            with st.spinner("Running Query Generator..."):
+                _run_inspector_stage("query_generator")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("query_generator")
+        if snap:
+            _inspector_show_errors(snap)
+
+            def _render_qgen_out():
+                qr = (st.session_state.inspector_state or {}).get("query_generation_result")
+                if qr:
+                    st.caption(qr.query_strategy_summary)
+                    st.caption(f"Category: {qr.detected_category} | {len(qr.queries)} queries")
+                st.json(snap["output"])
+
+            _inspector_io_columns(snap, _render_qgen_out)
+
+            # ── Query editor ──────────────────────────────────────────────
+            edited_queries = st.session_state.get("inspector_edited_queries") or []
+            if edited_queries:
+                st.markdown("**Edit queries before Retrieval runs:**")
+                import pandas as pd
+
+                df = pd.DataFrame([
+                    {
+                        "query": q.query,
+                        "source_type": q.source_type,
+                        "intent": q.intent or "",
+                        "target_fields": ", ".join(q.target_fields),
+                    }
+                    for q in edited_queries
+                ])
+                edited_df = st.data_editor(
+                    df,
+                    use_container_width=True,
+                    num_rows="dynamic",
+                    key="inspector_query_editor",
+                    column_config={
+                        "query": st.column_config.TextColumn("Query", width="large"),
+                        "source_type": st.column_config.TextColumn("Source Type"),
+                        "intent": st.column_config.TextColumn("Intent"),
+                        "target_fields": st.column_config.TextColumn("Target Fields (comma-sep)"),
+                    },
+                )
+                if st.button("Apply query edits", key="apply_query_edits"):
+                    from schemas import SearchQuery, new_id
+
+                    new_queries = []
+                    for _, row in edited_df.iterrows():
+                        q_text = str(row.get("query", "")).strip()
+                        if not q_text:
+                            continue
+                        new_queries.append(SearchQuery(
+                            query_id=new_id("query"),
+                            query=q_text,
+                            source_type=str(row.get("source_type", "official")).strip() or "official",
+                            intent=str(row.get("intent", "")).strip() or None,
+                            target_fields=[
+                                t.strip()
+                                for t in str(row.get("target_fields", "")).split(",")
+                                if t.strip()
+                            ],
+                        ))
+                    st.session_state.inspector_edited_queries = new_queries
+                    st.success(f"Saved {len(new_queries)} queries — will be used when Retrieval runs.")
+
+    # ── Stage 3: Retrieval ───────────────────────────────────────────────────
+    with st.container(border=True):
+        clicked = _inspector_stage_header("retrieval")
+        if clicked:
+            with st.spinner("Running Tavily Retrieval..."):
+                _run_inspector_stage("retrieval")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("retrieval")
+        if snap:
+            _inspector_show_errors(snap)
+
+            def _render_retrieval_out():
+                rr = (st.session_state.inspector_state or {}).get("retrieval_result")
+                if rr:
+                    st.caption(f"{rr.unique_result_count} unique URLs from {rr.raw_result_count} results")
+                st.json(snap["output"])
+
+            _inspector_io_columns(snap, _render_retrieval_out)
+
+            # ── URL selector ──────────────────────────────────────────────
+            all_urls = (st.session_state.inspector_state or {}).get("retrieved_urls", [])
+            if all_urls:
+                st.markdown("**Select URLs to pass to Firecrawl:**")
+                url_options = [u.canonical_url for u in all_urls]
+                url_labels = {u.canonical_url: f"[{u.source_type}] {u.url[:90]}" for u in all_urls}
+                current_sel = st.session_state.get("inspector_selected_urls") or url_options
+                selected = st.multiselect(
+                    f"{len(all_urls)} retrieved URLs — uncheck any you want to skip",
+                    options=url_options,
+                    default=[u for u in current_sel if u in url_options],
+                    format_func=lambda x: url_labels.get(x, x),
+                    key="inspector_url_multiselect",
+                )
+                st.session_state.inspector_selected_urls = selected
+                st.caption(f"{len(selected)} of {len(all_urls)} URLs selected")
+
+    # ── Stage 4: Firecrawl Scraper ───────────────────────────────────────────
+    with st.container(border=True):
+        clicked = _inspector_stage_header("firecrawl_scraper")
+        if clicked:
+            with st.spinner("Running Firecrawl Scraper..."):
+                _run_inspector_stage("firecrawl_scraper")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("firecrawl_scraper")
+        if snap:
+            _inspector_show_errors(snap)
+
+            def _render_firecrawl_out():
+                fc = (st.session_state.inspector_state or {}).get("firecrawl_result")
+                if fc:
+                    st.caption(f"{fc.successful_scrapes} scraped, {fc.failed_scrapes} failed")
+                    st.dataframe(
+                        [
+                            {
+                                "url": b.url,
+                                "chars": len(b.content or ""),
+                                "status": b.scrape_status,
+                                "error": b.error or "",
+                            }
+                            for b in fc.blocks
+                        ],
+                        use_container_width=True,
+                    )
+
+            _inspector_io_columns(snap, _render_firecrawl_out)
+
+    # ── Stage 5: Ingest ──────────────────────────────────────────────────────
+    with st.container(border=True):
+        clicked = _inspector_stage_header("ingest")
+        if clicked:
+            with st.spinner("Running Ingest (this may take a while)..."):
+                _run_inspector_stage("ingest")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("ingest")
+        if snap:
+            _inspector_show_errors(snap)
+            c_in, c_out = st.columns(2)
+            with c_in:
+                with st.expander("Input", expanded=False):
+                    st.json(snap["input"])
+            with c_out:
+                with st.expander("Output summary", expanded=True):
+                    s = st.session_state.inspector_state or {}
+                    raw_docs = s.get("raw_documents", [])
+                    chunks = s.get("semantic_chunks", [])
+                    ext_chunks = s.get("extraction_chunks", [])
+                    packets = s.get("normalized_packets", [])
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Raw Docs", len(raw_docs))
+                    m2.metric("Chunks", len(chunks))
+                    m3.metric("Selected", len(ext_chunks))
+                    m4.metric("Packets", len(packets))
+
+                    fr = s.get("field_report")
+                    if fr:
+                        st.caption(
+                            f"Field report: {fr.extracted_count} extracted, "
+                            f"{fr.ambiguous_count} ambiguous, {fr.not_found_count} not_found"
+                        )
+                        st.dataframe(
+                            [
+                                {
+                                    "field": e.field_path,
+                                    "status": e.status,
+                                    "value": str(e.value) if e.value is not None else "",
+                                    "sources": len(e.source_urls),
+                                    "snippet": (e.source_snippet or "")[:80],
+                                    "confidence": e.confidence,
+                                }
+                                for e in fr.entries
+                            ],
+                            use_container_width=True,
+                        )
+
+            with st.expander("Semantic Chunks detail", expanded=False):
+                s = st.session_state.inspector_state or {}
+                ext_ids = {c.chunk_id for c in s.get("extraction_chunks", [])}
+                st.json([
+                    {
+                        "chunk_id": c.chunk_id,
+                        "selected": c.chunk_id in ext_ids,
+                        "words": len(c.chunk_text.split()),
+                        "source_url": c.source_url,
+                        "target_fields": c.target_fields[:8],
+                        "preview": c.chunk_text[:300],
+                    }
+                    for c in s.get("semantic_chunks", [])
+                ])
+
+            with st.expander("Extracted Packets (raw)", expanded=False):
+                st.json(_safe_json((st.session_state.inspector_state or {}).get("extracted_packets", [])))
+
+            with st.expander("Normalized Packets", expanded=False):
+                st.json(_safe_json((st.session_state.inspector_state or {}).get("normalized_packets", [])))
+
+    # ── Stage 6: Adjudication ────────────────────────────────────────────────
+    with st.container(border=True):
+        clicked = _inspector_stage_header("adjudication")
+        if clicked:
+            with st.spinner("Running Conflict Adjudication..."):
+                _run_inspector_stage("adjudication")
+            st.rerun()
+        snap = st.session_state.inspector_snaps.get("adjudication")
+        if snap:
+            _inspector_show_errors(snap)
+            c_in, c_out = st.columns(2)
+            with c_in:
+                with st.expander("Input", expanded=False):
+                    st.json(snap["input"])
+            with c_out:
+                with st.expander("Output", expanded=True):
+                    s = st.session_state.inspector_state or {}
+                    adj = s.get("adjudicated", [])
+                    if adj:
+                        st.caption(f"{len(adj)} adjudication entries")
+                        st.dataframe(
+                            [
+                                {
+                                    "field": a.get("field_name"),
+                                    "resolution": a.get("resolution"),
+                                    "winner": a.get("winner"),
+                                    "value": a.get("value"),
+                                    "confidence": a.get("confidence"),
+                                    "deciding_factor": a.get("deciding_factor"),
+                                    "reasoning": a.get("reasoning"),
+                                }
+                                for a in adj
+                            ],
+                            use_container_width=True,
+                        )
+                        debates = [a["debate"] for a in adj if a.get("debate")]
+                        if debates:
+                            with st.expander("Debate Transcripts", expanded=False):
+                                st.json(debates)
+                    else:
+                        st.info("No conflicts detected between sources.")
+
+            fr = (st.session_state.inspector_state or {}).get("field_report")
+            if fr:
+                with st.expander("Final Field Report (post-adjudication)", expanded=False):
+                    st.caption(
+                        f"{fr.extracted_count} extracted, "
+                        f"{fr.ambiguous_count} ambiguous, {fr.not_found_count} not_found"
+                    )
+                    st.dataframe(
+                        [
+                            {
+                                "field": e.field_path,
+                                "status": e.status,
+                                "value": str(e.value) if e.value is not None else "",
+                                "sources": len(e.source_urls),
+                                "confidence": e.confidence,
+                                "corroboration": e.corroboration_count,
+                            }
+                            for e in fr.entries
+                        ],
+                        use_container_width=True,
+                    )
 
 
 def preview_content(content: str | None, limit: int = 900) -> str | None:
@@ -499,7 +1108,7 @@ if (
 ):
     reset_compare_side("b")
 
-tabs = st.tabs(["Input verifier", "Compare", "Converse"])
+tabs = st.tabs(["Input verifier", "Compare", "Converse", "Pipeline Inspector"])
 
 with tabs[0]:
     left, right = st.columns([0.58, 0.42], gap="large")
@@ -568,3 +1177,6 @@ with tabs[1]:
 
 with tabs[2]:
     st.info("Converse starts after the final brief is generated. It answers follow-up questions only from stored claim JSON and brief JSON.")
+
+with tabs[3]:
+    render_inspector_tab()

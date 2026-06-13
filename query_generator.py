@@ -109,6 +109,10 @@ Generate coverage across all of these:
 8. Membership Scale / Loyalty Liability
 9. Customer Sentiment (complaints, praise)
 10. Competitive Position (vs. closest competitor)
+11. Digital Experience (mobile app, App Store / Google Play ratings and
+    reviews, personalization, gamification) - applies to EVERY category,
+    not only retail. Use "[program] app review Google Play" and
+    "[program] mobile app App Store rating" style phrasing.
 
 NOTE on Technology Discovery:
 Loyalty platform vendor information is rarely on public web pages. Only
@@ -182,7 +186,9 @@ Return ONLY valid JSON. No explanation. No markdown.
     "tier_structure": ["Q04", "Q05"],
     "member_sentiment": ["Q09", "Q10"],
     "partnerships": ["Q06", "Q07"],
-    "competitive_position": ["Q08"]
+    "competitive_position": ["Q08"],
+    "digital_experience": ["Q11"],
+    "app_ratings": ["Q11"]
   },
   "queries": [
     {
@@ -203,6 +209,7 @@ VALIDATION RULES checked by the calling system:
 - at least one query must target sentiment
 - at least one query must target competitive position
 - at least one query must target financial/membership scale
+- at least one query must target the mobile app / digital experience
 """.strip()
 
 
@@ -487,6 +494,12 @@ def _domain_query_templates(domain: str, geography: str) -> list[dict[str, Any]]
             "source_type": "forums",
         },
         {
+            "suffix": "mobile app review rating",
+            "intent": "digital experience and app ratings",
+            "target_fields": ["app_ratings", "mobile_app", "personalization"],
+            "source_type": "app_reviews",
+        },
+        {
             "suffix": "competitors comparison value",
             "intent": "competitive position",
             "target_fields": ["competitive_position", "closest_competitors"],
@@ -555,7 +568,7 @@ def _domain_query_templates(domain: str, geography: str) -> list[dict[str, Any]]
             }
         )
 
-    return templates[:10]
+    return templates[:12]
 
 
 def _priority_fields_for_domain(domain: str) -> list[str]:

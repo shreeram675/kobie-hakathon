@@ -198,7 +198,11 @@ def extract_from_chunks(
     *,
     client: ExtractionClient | None = None,
 ) -> list[ExtractedObjectPacket]:
-    """Extract runtime-schema object packets from chunks using Gemini."""
+    """Extract runtime-schema object packets from chunks using Gemini.
+
+    Chunks are packed into multi-chunk batches so one Gemini call covers
+    several evidence units instead of paying one call per chunk.
+    """
 
     if not chunks or not schema_config.object_types:
         return []
@@ -207,13 +211,14 @@ def extract_from_chunks(
     packets: list[ExtractedObjectPacket] = []
     max_chunks = _env_int("MAX_EXTRACTION_CHUNKS", 30)
     selected_chunks = chunks[:max_chunks] if max_chunks > 0 else chunks
+    batches = build_extraction_batches(selected_chunks, _env_int("EXTRACTION_BATCH_WORDS", 4000))
     concurrency = max(1, _env_int("GEMINI_EXTRACTION_CONCURRENCY", 1))
     failures: list[str] = []
 
     if concurrency == 1:
-        for chunk in selected_chunks:
+        for batch in batches:
             try:
-                packets.extend(_extract_chunk(chunk, schema_config, client))
+                packets.extend(_extract_batch(batch, schema_config, client))
             except Exception as exc:
                 failures.append(str(exc))
         if not packets and failures:
@@ -221,7 +226,7 @@ def extract_from_chunks(
         return packets
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(_extract_chunk, chunk, schema_config, client) for chunk in selected_chunks]
+        futures = [executor.submit(_extract_batch, batch, schema_config, client) for batch in batches]
         for future in as_completed(futures):
             try:
                 packets.extend(future.result())
@@ -230,6 +235,28 @@ def extract_from_chunks(
     if not packets and failures:
         raise RuntimeError(_summarize_extraction_failures(failures))
     return packets
+
+
+def build_extraction_batches(chunks: list[SemanticChunk], batch_words: int) -> list[list[SemanticChunk]]:
+    """Group consecutive chunks under a word budget; one Gemini call per batch."""
+
+    if batch_words <= 0:
+        return [[chunk] for chunk in chunks]
+
+    batches: list[list[SemanticChunk]] = []
+    current: list[SemanticChunk] = []
+    current_words = 0
+    for chunk in chunks:
+        chunk_words = len(chunk.chunk_text.split())
+        if current and current_words + chunk_words > batch_words:
+            batches.append(current)
+            current = []
+            current_words = 0
+        current.append(chunk)
+        current_words += chunk_words
+    if current:
+        batches.append(current)
+    return batches
 
 
 def select_informative_chunks(
@@ -247,22 +274,65 @@ def select_informative_chunks(
         return [], []
 
     min_score = min_score if min_score is not None else _env_int("MIN_EXTRACTION_CHUNK_SCORE", 2)
+    if max_chunks is None:
+        max_chunks = _env_int("MAX_EXTRACTION_CHUNKS", 30)
     scored = [
         (score_chunk_for_schema(chunk, schema_config, program_name=program_name, brand=brand), index, chunk)
         for index, chunk in enumerate(chunks)
     ]
-    selected_scored = [item for item in scored if item[0] >= min_score]
-    if not selected_scored:
-        selected_scored = sorted(scored, key=lambda item: (-item[0], item[1]))[: min(5, len(scored))]
+    candidates = [item for item in scored if item[0] >= min_score]
+    if not candidates:
+        candidates = sorted(scored, key=lambda item: (-item[0], item[1]))[: min(5, len(scored))]
 
-    selected_scored = sorted(selected_scored, key=lambda item: (-item[0], item[1]))
-    if max_chunks and max_chunks > 0:
-        selected_scored = selected_scored[:max_chunks]
+    selected_scored = _greedy_field_coverage(candidates, schema_config, max_chunks)
 
     selected_ids = {chunk.chunk_id for _score, _index, chunk in selected_scored}
     selected = [chunk for _score, _index, chunk in sorted(selected_scored, key=lambda item: item[1])]
     skipped = [chunk for chunk in chunks if chunk.chunk_id not in selected_ids]
     return selected, skipped
+
+
+def _greedy_field_coverage(
+    candidates: list[tuple[int, int, SemanticChunk]],
+    schema_config: SchemaConfig,
+    max_chunks: int | None,
+) -> list[tuple[int, int, SemanticChunk]]:
+    """Pick chunks that cover the most uncovered fields before spending budget on score."""
+
+    matches = {
+        item[2].chunk_id: _matched_field_names(item[2], schema_config)
+        for item in candidates
+    }
+    uncovered = set(_all_field_names(schema_config))
+    selected: list[tuple[int, int, SemanticChunk]] = []
+    remaining = list(candidates)
+
+    while remaining and uncovered and (not max_chunks or max_chunks <= 0 or len(selected) < max_chunks):
+        best = max(
+            remaining,
+            key=lambda item: (len(matches[item[2].chunk_id] & uncovered), item[0], -item[1]),
+        )
+        if not matches[best[2].chunk_id] & uncovered:
+            break
+        selected.append(best)
+        uncovered -= matches[best[2].chunk_id]
+        remaining.remove(best)
+
+    for item in sorted(remaining, key=lambda item: (-item[0], item[1])):
+        if max_chunks and max_chunks > 0 and len(selected) >= max_chunks:
+            break
+        selected.append(item)
+    return selected
+
+
+def _matched_field_names(chunk: SemanticChunk, schema_config: SchemaConfig) -> set[str]:
+    text = chunk.chunk_text.lower()
+    return {
+        field.name
+        for object_type in schema_config.object_types
+        for field in object_type.fields
+        if any(keyword in text for keyword in _field_keywords(field))
+    }
 
 
 def score_chunk_for_schema(
@@ -305,95 +375,53 @@ def score_chunk_for_schema(
     return score
 
 
-def _extract_chunk(
-    chunk: SemanticChunk,
+def _extract_batch(
+    batch: list[SemanticChunk],
     schema_config: SchemaConfig,
     client: ExtractionClient,
 ) -> list[ExtractedObjectPacket]:
-    candidate_fields = select_candidate_fields(chunk, schema_config)
-    candidate_schema = narrow_schema_config(schema_config, candidate_fields)
-    detected_fields = detect_present_fields(chunk, candidate_schema, client)
-    if not detected_fields:
+    candidate_fields = sorted(
+        {field for chunk in batch for field in select_candidate_fields(chunk, schema_config)}
+    )
+    extraction_schema = narrow_schema_config(schema_config, candidate_fields)
+    if not extraction_schema.object_types:
         return []
 
-    extraction_schema = candidate_schema
-    prompt = build_extraction_prompt(chunk, extraction_schema)
+    prompt = build_extraction_prompt(batch, extraction_schema)
     for _attempt in range(2):
         try:
             raw = client.complete_text(prompt)
-            parsed = parse_extraction_response(raw, chunk, extraction_schema)
+        except requests.RequestException:
+            raise
+        try:
+            parsed = parse_extraction_response(raw, batch, extraction_schema)
             return [fill_missing_fields(packet, extraction_schema) for packet in parsed]
         except Exception:
             continue
     return []
 
 
-def detect_present_fields(
-    chunk: SemanticChunk,
-    schema_config: SchemaConfig,
-    client: ExtractionClient,
-) -> list[str]:
-    """Two-pass first step: ask Gemini which candidate fields are evidenced."""
-
-    fields = _all_field_names(schema_config)
-    if not fields:
-        return []
-    prompt = build_field_detection_prompt(chunk, schema_config)
-    for _attempt in range(2):
-        try:
-            payload = json.loads(_extract_json_block(client.complete_text(prompt)))
-            present = payload.get("present_fields", [])
-            if not isinstance(present, list):
-                return []
-            valid_fields = set(fields)
-            return sorted({str(field) for field in present if str(field) in valid_fields})
-        except requests.HTTPError:
-            raise
-        except Exception:
-            continue
-    return []
-
-
-def build_field_detection_prompt(chunk: SemanticChunk, schema_config: SchemaConfig) -> str:
+def build_extraction_prompt(chunks: list[SemanticChunk], schema_config: SchemaConfig) -> str:
     schema_json = json.dumps(schema_config.model_dump(), ensure_ascii=True, indent=2)
-    return f"""
-You are a strict field-presence detector.
-
-Use ONLY the chunk text. Do not extract values. Do not infer.
-Return only fields that have explicit evidence in the chunk.
-Also return fields that are source-grounded derivations from the chunk, such as
-a tier field implied by a tier table, a points value implied by a redemption
-example, or a program type implied by the page's own wording. Do not use
-outside knowledge.
-
-Runtime candidate schema:
-{schema_json}
-
-Return JSON only:
-{{"present_fields": ["field.path"]}}
-
-If no candidate fields are explicitly evidenced, return:
-{{"present_fields": []}}
-
-Chunk text:
-\"\"\"{chunk.chunk_text}\"\"\"
-""".strip()
-
-
-def build_extraction_prompt(chunk: SemanticChunk, schema_config: SchemaConfig) -> str:
-    schema_json = json.dumps(schema_config.model_dump(), ensure_ascii=True, indent=2)
-    target_fields = ", ".join(chunk.target_fields) if chunk.target_fields else "all fields in the runtime schema"
+    chunk_blocks = "\n\n".join(
+        f"CHUNK {index + 1}\n"
+        f"chunk_id: {chunk.chunk_id}\n"
+        f"source_url: {chunk.source_url}\n"
+        f"priority target fields: {', '.join(chunk.target_fields) if chunk.target_fields else 'all fields in the runtime schema'}\n"
+        f'chunk_text:\n"""{chunk.chunk_text}"""'
+        for index, chunk in enumerate(chunks)
+    )
     return f"""
 You are a strict structured extraction engine.
 
-Use ONLY the provided chunk text. Do not use training knowledge. Do not guess
-or fill missing values. You may derive a value only when the chunk itself
+Use ONLY the chunk texts provided below. Do not use training knowledge. Do not
+guess or fill missing values. You may derive a value only when the chunk itself
 contains enough evidence to support that derivation, and the field must still
-include an exact supporting source_snippet from the chunk.
+include an exact supporting source_snippet copied from that chunk.
 
-Priority target fields for this chunk: {target_fields}
-You must still consider every field in the runtime schema when the chunk
-explicitly contains evidence for it.
+Each CHUNK below is an independent evidence unit identified by chunk_id. Never
+combine evidence across chunks; every extracted field must be supported by the
+single chunk named in its object's chunk_id.
 
 Runtime schema:
 {schema_json}
@@ -402,14 +430,14 @@ Return JSON only in this exact shape:
 {{
   "objects": [
     {{
+      "chunk_id": "chunk_id of the chunk the evidence came from",
       "object_type": "one runtime object_type",
-      "scope": {{"geography": "only if explicitly stated, otherwise omit or null"}},
+      "scope": {{"geography": "only if explicitly stated in that chunk, otherwise omit"}},
       "fields": {{
         "field_name": {{
           "value": "explicit value or null",
-          "status": "EXTRACTED | NOT_FOUND | AMBIGUOUS",
-          "source_url": "source URL for EXTRACTED or AMBIGUOUS evidence",
-          "source_snippet": "short exact supporting text for EXTRACTED only",
+          "status": "EXTRACTED | AMBIGUOUS",
+          "source_snippet": "short exact supporting text copied verbatim from that chunk",
           "confidence": 0.0
         }}
       }}
@@ -418,38 +446,41 @@ Return JSON only in this exact shape:
 }}
 
 Rules:
-- EXTRACTED requires an exact source_snippet copied from the chunk, including
-  when the value is derived from the cited evidence.
-- Put the chunk source URL on every EXTRACTED or AMBIGUOUS field.
-- For every field in the runtime schema, return one field object.
-- If evidence is missing, return value null and status NOT_FOUND.
-- If evidence is unclear or conflicting inside this chunk, return value null and status AMBIGUOUS.
+- EXTRACTED requires an exact source_snippet copied verbatim from the same
+  chunk, including when the value is derived from the cited evidence.
+- Only include fields with status EXTRACTED or AMBIGUOUS. Omit fields with no
+  evidence in the chunk; do not return NOT_FOUND fields.
+- If evidence is unclear or conflicting inside one chunk, return value null and
+  status AMBIGUOUS.
+- Return at most one object per chunk per object_type. Skip chunks without
+  evidence entirely.
 - Never invent object types or field names outside the runtime schema.
 - It is valid to return an empty objects array.
 
-Chunk source URL: {chunk.source_url}
-Chunk ID: {chunk.chunk_id}
-
-Chunk text:
-\"\"\"{chunk.chunk_text}\"\"\"
+{chunk_blocks}
 """.strip()
 
 
 def parse_extraction_response(
     raw_text: str,
-    chunk: SemanticChunk,
+    chunks: list[SemanticChunk],
     schema_config: SchemaConfig | None = None,
 ) -> list[ExtractedObjectPacket]:
-    """Parse and sanitize Gemini extraction output for one chunk."""
+    """Parse and sanitize Gemini extraction output for a chunk batch."""
 
     payload = json.loads(_extract_json_block(raw_text))
     objects = payload if isinstance(payload, list) else payload.get("objects", [])
     if not isinstance(objects, list):
         raise ValueError("extraction response must contain an objects list")
 
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    default_chunk = chunks[0] if len(chunks) == 1 else None
     packets: list[ExtractedObjectPacket] = []
     for item in objects:
         if not isinstance(item, dict):
+            continue
+        chunk = chunks_by_id.get(str(item.get("chunk_id") or "")) or default_chunk
+        if chunk is None:
             continue
         object_type = str(item.get("object_type") or "").strip()
         fields_payload = item.get("fields") or {}
@@ -460,7 +491,7 @@ def parse_extraction_response(
             continue
         valid_field_names = {field.name for field in object_def.fields} if object_def else None
         fields = {
-            str(field_name): _parse_field(field_data, chunk.source_url)
+            str(field_name): _parse_field(field_data, chunk)
             for field_name, field_data in fields_payload.items()
             if isinstance(field_data, dict) and (valid_field_names is None or str(field_name) in valid_field_names)
         }
@@ -536,38 +567,50 @@ def narrow_schema_config(schema_config: SchemaConfig, field_names: list[str]) ->
     return SchemaConfig(object_types=object_types, scope_fields=schema_config.scope_fields)
 
 
-def _parse_field(field_data: dict[str, Any], fallback_source_url: str) -> ExtractedField:
+def _parse_field(field_data: dict[str, Any], chunk: SemanticChunk) -> ExtractedField:
     status = str(field_data.get("status") or "NOT_FOUND").strip().upper()
     if status not in VALID_STATUSES:
         status = "AMBIGUOUS"
 
     if status == "EXTRACTED":
         snippet = field_data.get("source_snippet")
-        if not isinstance(snippet, str) or not snippet.strip():
+        if (
+            not isinstance(snippet, str)
+            or not snippet.strip()
+            or not _snippet_in_text(snippet, chunk.chunk_text)
+        ):
             return ExtractedField(
                 value=None,
                 status="AMBIGUOUS",
-                source_url=_field_source_url(field_data, fallback_source_url),
+                source_url=chunk.source_url,
                 source_snippet=None,
                 confidence=0.0,
             )
-        confidence = field_data.get("confidence")
         return ExtractedField(
             value=field_data.get("value"),
             status="EXTRACTED",
-            source_url=_field_source_url(field_data, fallback_source_url),
+            source_url=chunk.source_url,
             source_snippet=snippet,
-            confidence=_coerce_confidence(confidence),
+            confidence=_coerce_confidence(field_data.get("confidence")),
         )
 
-    source_url = _field_source_url(field_data, fallback_source_url) if status == "AMBIGUOUS" else None
     return ExtractedField(
         value=None,
         status=status,  # type: ignore[arg-type]
-        source_url=source_url,
+        source_url=chunk.source_url if status == "AMBIGUOUS" else None,
         source_snippet=field_data.get("source_snippet") if status == "AMBIGUOUS" else None,
         confidence=_coerce_confidence(field_data.get("confidence")) if status == "AMBIGUOUS" else None,
     )
+
+
+def _snippet_in_text(snippet: str, chunk_text: str) -> bool:
+    """Hallucination gate: the cited snippet must literally appear in the chunk."""
+
+    return _normalize_for_match(snippet) in _normalize_for_match(chunk_text)
+
+
+def _normalize_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().casefold()
 
 
 def _coerce_confidence(value: Any) -> float:
@@ -598,7 +641,7 @@ def _ordered_models(primary_model: str, fallback_models: str) -> list[str]:
 
 def _summarize_extraction_failures(failures: list[str]) -> str:
     first = failures[0] if failures else "Unknown extraction failure."
-    return f"Gemini extraction failed for {len(failures)} chunks. First error: {first}"
+    return f"Gemini extraction failed for {len(failures)} chunk batches. First error: {first}"
 
 
 def _context_terms(program_name: str | None, brand: str | None) -> set[str]:
@@ -619,13 +662,6 @@ def _chunk_matches_any_field(text: str, field_names: list[str], schema_config: S
             if field.name in wanted and any(keyword in text for keyword in _field_keywords(field)):
                 return True
     return False
-
-
-def _field_source_url(field_data: dict[str, Any], fallback_source_url: str) -> str:
-    source_url = field_data.get("source_url")
-    if isinstance(source_url, str) and source_url.strip():
-        return source_url.strip()
-    return fallback_source_url
 
 
 def _all_field_names(schema_config: SchemaConfig) -> list[str]:

@@ -167,6 +167,29 @@ def ingest_node(state: AgentState) -> dict:
         }
 
 
+def adjudication_node(state: AgentState) -> dict:
+    """Detect conflicting extracted claims and resolve them via debate."""
+
+    try:
+        from adjudication.conflict_adjudicator import adjudicator_node
+
+        updated = adjudicator_node(state)
+        return {
+            "conflicts": updated.get("conflicts", []),
+            "adjudicated": updated.get("adjudicated", []),
+            "field_report": updated.get("field_report"),
+            "updated_at": now_iso(),
+        }
+    except Exception as exc:
+        return {
+            "errors": [
+                *state["errors"],
+                PipelineError(stage="adjudication", message=str(exc)),
+            ],
+            "updated_at": now_iso(),
+        }
+
+
 def build_kobie_graph():
     graph = StateGraph(AgentState)
     graph.add_node("input_validator", input_validator_node)
@@ -174,6 +197,7 @@ def build_kobie_graph():
     graph.add_node("retrieval", retrieval_node)
     graph.add_node("firecrawl_scraper", firecrawl_node)
     graph.add_node("ingest", ingest_node)
+    graph.add_node("adjudication", adjudication_node)
     graph.add_edge(START, "input_validator")
     graph.add_conditional_edges(
         "input_validator",
@@ -183,7 +207,8 @@ def build_kobie_graph():
     graph.add_edge("query_generator", "retrieval")
     graph.add_edge("retrieval", "firecrawl_scraper")
     graph.add_edge("firecrawl_scraper", "ingest")
-    graph.add_edge("ingest", END)
+    graph.add_edge("ingest", "adjudication")
+    graph.add_edge("adjudication", END)
     return graph.compile()
 
 
@@ -261,10 +286,21 @@ def run_validation_chat_traced(
         emit("ingest", "complete", "Normalized object packets are ready.")
     elif state.get("semantic_chunks"):
         emit("ingest", "waiting", "Chunks are ready, but no explicit schema facts were extracted.")
+        return state
     elif state.get("raw_documents"):
         emit("ingest", "waiting", "Raw documents are stored, but no semantic chunks were produced.")
+        return state
     else:
         emit("ingest", "waiting", "No usable raw documents were stored after Firecrawl.")
+        return state
+
+    emit("adjudication", "running", "Detecting conflicting claims and running adversarial debates.")
+    state = {**state, **adjudication_node(state)}
+    conflicts = state.get("conflicts", [])
+    if conflicts:
+        emit("adjudication", "complete", f"Adjudicated {len(conflicts)} conflicting fields.")
+    else:
+        emit("adjudication", "complete", "No conflicting claims between sources.")
     return state
 
 
@@ -284,33 +320,76 @@ def run_ingest(state: AgentState) -> AgentState:
     return {**state, **ingest_node(state)}
 
 
+def run_adjudication(state: AgentState) -> AgentState:
+    return {**state, **adjudication_node(state)}
+
+
 def _latest_error_message(state: AgentState, fallback: str) -> str:
     errors = state.get("errors", [])
     return errors[-1].message if errors else fallback
 
 
 def select_urls_for_firecrawl(urls) -> list:
-    """Limit Firecrawl spend to the highest-value retrieved URLs."""
+    """Limit Firecrawl spend while keeping every query's field coverage.
+
+    URLs are grouped per originating query and taken round-robin (best URL of
+    each query first), so a small scrape budget still covers sentiment, news,
+    financial, and competitive queries instead of only official pages. Query
+    groups are interleaved by source type so each source class survives a
+    budget smaller than the query count.
+    """
 
     max_urls = _env_int("MAX_FIRECRAWL_URLS", 12)
-    if max_urls <= 0:
-        return urls
+    if max_urls <= 0 or len(urls) <= max_urls:
+        return list(urls)
 
     priority = {
         "official": 0,
         "terms": 1,
-        "faq": 2,
-        "partners": 3,
-        "valuation": 4,
-        "app_reviews": 5,
-        "forums": 6,
-        "competitors": 7,
-        "news": 8,
+        "financial": 2,
+        "faq": 3,
+        "partners": 4,
+        "review": 5,
+        "valuation": 5,
+        "app_reviews": 6,
+        "news": 7,
+        "forum": 8,
+        "forums": 8,
+        "competitors": 9,
     }
-    return sorted(
-        urls,
-        key=lambda item: (priority.get(str(item.source_type).lower(), 50), -float(item.score or 0)),
-    )[:max_urls]
+
+    def url_rank(item):
+        return (priority.get(str(item.source_type).lower(), 50), -float(item.score or 0))
+
+    groups: dict[str, list] = {}
+    for item in sorted(urls, key=url_rank):
+        groups.setdefault(str(item.query_id), []).append(item)
+
+    groups_by_type: dict[str, list[list]] = {}
+    for group in sorted(groups.values(), key=lambda group: url_rank(group[0])):
+        groups_by_type.setdefault(str(group[0].source_type).lower(), []).append(group)
+
+    ordered_groups: list[list] = []
+    type_queues = list(groups_by_type.values())
+    while type_queues:
+        remaining_queues = []
+        for queue in type_queues:
+            ordered_groups.append(queue.pop(0))
+            if queue:
+                remaining_queues.append(queue)
+        type_queues = remaining_queues
+
+    selected: list = []
+    while ordered_groups and len(selected) < max_urls:
+        remaining_groups = []
+        for group in ordered_groups:
+            if len(selected) >= max_urls:
+                break
+            selected.append(group.pop(0))
+            if group:
+                remaining_groups.append(group)
+        ordered_groups = remaining_groups
+    return selected
 
 
 def _env_int(name: str, default: int) -> int:

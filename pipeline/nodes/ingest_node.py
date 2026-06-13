@@ -10,6 +10,7 @@ from schemas import AgentState, NormalizedObjectPacket, PipelineError, now_iso
 from pipeline.schema_config import FIELD_ALIASES, default_arcguide_schema_config
 from pipeline.stages.chunker import semantic_chunk
 from pipeline.stages.extractor import ExtractionClient, SchemaConfig, extract_from_chunks, select_informative_chunks
+from pipeline.stages.field_report import build_field_report
 from pipeline.stages.normalizer import normalize_packet
 from pipeline.stages.raw_store import store_firecrawl_output
 
@@ -64,6 +65,7 @@ def ingest_node(
     extracted_packets = extract_from_chunks(extraction_chunks, config, client=extractor_client)
     normalized_packets = [normalize_packet(packet, config) for packet in extracted_packets]
     persist_normalized_packets(normalized_packets, db_path=db_path)
+    field_report = build_field_report(normalized_packets, config, entity_name=state.get("program_name"))
 
     return {
         "raw_documents": raw_documents,
@@ -72,6 +74,7 @@ def ingest_node(
         "skipped_chunks": skipped_chunks,
         "extracted_packets": extracted_packets,
         "normalized_packets": normalized_packets,
+        "field_report": field_report,
         "updated_at": now_iso(),
     }
 

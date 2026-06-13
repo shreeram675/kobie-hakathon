@@ -95,6 +95,16 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "burn_details": ("partnerships.details",),
     "mobile_app": ("digital_experience.mobile_app_available",),
     "app_ratings": ("digital_experience.app_ratings",),
+    "app_reviews": (
+        "digital_experience.app_ratings",
+        "digital_experience.mobile_app_available",
+    ),
+    "digital_experience": (
+        "digital_experience.mobile_app_available",
+        "digital_experience.app_ratings",
+        "digital_experience.personalization_features",
+        "digital_experience.gamification_features",
+    ),
     "app_store_rating": ("digital_experience.app_ratings",),
     "play_store_rating": ("digital_experience.app_ratings",),
     "personalization": ("digital_experience.personalization_features",),

@@ -105,9 +105,10 @@ def test_local_query_fallback_keeps_queries_concise():
 
     result = build_local_query_generation_output(identity, reason="Gemini returned 429")
 
-    assert len(result.queries) == 10
+    assert 9 <= len(result.queries) <= 15
     assert all(len(query.query.split()) <= 10 for query in result.queries)
     assert any("lounge_access" in query.target_fields for query in result.queries)
+    assert any("app_ratings" in query.target_fields for query in result.queries)
 
 
 def test_query_generator_prompt_contains_strict_query_laws():

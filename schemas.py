@@ -263,6 +263,30 @@ class NormalizedObjectPacket(ExtractedObjectPacket):
     normalized_at: str = Field(default_factory=now_iso)
 
 
+class FieldReportEntry(KobieModel):
+    """Per-field aggregation of extracted evidence with source attribution."""
+
+    field_path: str
+    category: str
+    status: Literal["extracted", "ambiguous", "not_found"]
+    value: Any | None = None
+    source_urls: list[str] = Field(default_factory=list)
+    source_snippet: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    corroboration_count: int = Field(default=0, ge=0)
+
+
+class FieldReport(KobieModel):
+    """Final per-field output: every schema field with value, sources, and status."""
+
+    entity_name: str | None = None
+    generated_at: str = Field(default_factory=now_iso)
+    entries: list[FieldReportEntry] = Field(default_factory=list)
+    extracted_count: int = Field(default=0, ge=0)
+    ambiguous_count: int = Field(default=0, ge=0)
+    not_found_count: int = Field(default=0, ge=0)
+
+
 class PageRef(KobieModel):
     page_id: str = Field(default_factory=lambda: new_id("page"))
     source_id: str | None = None
@@ -392,10 +416,12 @@ class AgentState(TypedDict):
     schema_config: NotRequired[dict[str, Any] | None]
     extracted_packets: NotRequired[list[ExtractedObjectPacket]]
     normalized_packets: NotRequired[list[NormalizedObjectPacket]]
+    field_report: NotRequired[FieldReport | None]
     retrieved_pages: list[PageRef]
     sanitized_chunks: list[ChunkRef]
     extracted_claims: list[Claim]
-    conflicts: list[ConflictRecord]
+    conflicts: list[ConflictRecord | dict[str, Any]]
+    adjudicated: NotRequired[list[dict[str, Any]]]
     adjudicated_claims: list[Claim]
     schema_coverage: SchemaCoverage
     data_quality: float
@@ -433,10 +459,12 @@ def build_initial_state(user_input: str, mode: RunMode = RunMode.SINGLE) -> Agen
         "schema_config": None,
         "extracted_packets": [],
         "normalized_packets": [],
+        "field_report": None,
         "retrieved_pages": [],
         "sanitized_chunks": [],
         "extracted_claims": [],
         "conflicts": [],
+        "adjudicated": [],
         "adjudicated_claims": [],
         "schema_coverage": SchemaCoverage(),
         "data_quality": 0.0,

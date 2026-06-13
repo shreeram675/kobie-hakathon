@@ -13,11 +13,13 @@ from pipeline.stages.extractor import (
     extract_from_chunks,
     select_informative_chunks,
 )
+from pipeline.stages.field_report import build_field_report
 from pipeline.stages.normalizer import generate_identity_hash, normalize_packet
 from pipeline.stages.raw_store import hash_url, store_firecrawl_output
 from schemas import (
     ExtractedField,
     ExtractedObjectPacket,
+    NormalizedObjectPacket,
     RawDocument,
     RetrievedUrl,
     ScrapedUrlBlock,
@@ -125,8 +127,10 @@ def test_semantic_chunk_splits_headings_and_oversized_sections():
 class FakeClient:
     def __init__(self, responses):
         self.responses = list(responses)
+        self.prompts = []
 
     def complete_text(self, prompt: str) -> str:
+        self.prompts.append(prompt)
         return self.responses.pop(0)
 
 
@@ -175,11 +179,7 @@ def test_extractor_returns_packets_and_requires_snippets():
     }
     """
 
-    packets = extract_from_chunks(
-        [chunk],
-        runtime_schema(),
-        client=FakeClient(['{"present_fields":["name","employees"]}', raw]),
-    )
+    packets = extract_from_chunks([chunk], runtime_schema(), client=FakeClient([raw]))
 
     assert packets[0].fields["name"].status == "EXTRACTED"
     assert packets[0].fields["name"].source_url == "https://example.com"
@@ -214,7 +214,7 @@ def test_extractor_filters_unknown_schema_fields():
     }
     """
 
-    packets = extract_from_chunks([chunk], runtime_schema(), client=FakeClient(['{"present_fields":["name"]}', raw]))
+    packets = extract_from_chunks([chunk], runtime_schema(), client=FakeClient([raw]))
 
     assert len(packets) == 1
     assert set(packets[0].fields) == {"name", "employees"}
@@ -239,7 +239,7 @@ def test_extractor_surfaces_provider_failures():
     try:
         extract_from_chunks([chunk], runtime_schema(), client=RateLimitedExtractionClient())
     except RuntimeError as exc:
-        assert "Gemini extraction failed for 1 chunks" in str(exc)
+        assert "Gemini extraction failed for 1 chunk batches" in str(exc)
         assert "temporarily unavailable (429)" in str(exc)
     else:
         raise AssertionError("Expected provider failure to be surfaced")
@@ -326,7 +326,7 @@ def test_ingest_node_outputs_and_persists_normalized_packets(tmp_path):
     raw = """
     {"objects":[{"object_type":"Company","scope":{"geography":"US"},"fields":{"name":{"value":"Acme","status":"EXTRACTED","source_snippet":"Acme has 42 employees.","confidence":0.9}}}]}
     """
-    update = ingest_node(state, extractor_client=FakeClient(['{"present_fields":["name"]}', raw]), db_path=db_path)
+    update = ingest_node(state, extractor_client=FakeClient([raw]), db_path=db_path)
 
     assert update["normalized_packets"]
     assert update["extracted_packets"][0].fields["employees"].status == "NOT_FOUND"
@@ -367,7 +367,7 @@ def test_ingest_node_uses_default_arcguide_schema_when_state_has_none(tmp_path):
 
     update = ingest_node(
         state,
-        extractor_client=FakeClient(['{"present_fields":["program_basics.program_name"]}', raw]),
+        extractor_client=FakeClient([raw]),
         db_path=db_path,
     )
 
@@ -375,6 +375,197 @@ def test_ingest_node_uses_default_arcguide_schema_when_state_has_none(tmp_path):
     assert update["extraction_chunks"]
     assert "source_url" in update["normalized_packets"][0].fields["program_basics.program_name"].model_dump()
     assert "program_basics.program_name" in update["semantic_chunks"][0].target_fields
+
+
+def test_extractor_batches_chunks_into_single_call():
+    chunk_a = SemanticChunk(
+        chunk_id="chunk_1",
+        source_url="https://example.com/a",
+        chunk_text="Acme has 42 employees.",
+    )
+    chunk_b = SemanticChunk(
+        chunk_id="chunk_2",
+        source_url="https://example.com/b",
+        chunk_text="Beta Corp employs 7 staff employees.",
+    )
+    raw = """
+    {
+      "objects": [
+        {"chunk_id": "chunk_1", "object_type": "Company", "fields": {"name": {"value": "Acme", "status": "EXTRACTED", "source_snippet": "Acme has 42 employees.", "confidence": 0.9}}},
+        {"chunk_id": "chunk_2", "object_type": "Company", "fields": {"name": {"value": "Beta Corp", "status": "EXTRACTED", "source_snippet": "Beta Corp employs 7 staff employees.", "confidence": 0.8}}}
+      ]
+    }
+    """
+    client = FakeClient([raw])
+
+    packets = extract_from_chunks([chunk_a, chunk_b], runtime_schema(), client=client)
+
+    assert len(client.prompts) == 1
+    assert len(packets) == 2
+    by_chunk = {packet.chunk_id: packet for packet in packets}
+    assert by_chunk["chunk_1"].fields["name"].source_url == "https://example.com/a"
+    assert by_chunk["chunk_2"].fields["name"].source_url == "https://example.com/b"
+
+
+def test_extractor_rejects_snippets_not_present_in_chunk():
+    chunk = SemanticChunk(
+        chunk_id="chunk_1",
+        source_url="https://example.com",
+        chunk_text="Acme has 42 employees.",
+    )
+    raw = """
+    {
+      "objects": [
+        {
+          "object_type": "Company",
+          "fields": {
+            "name": {"value": "Acme", "status": "EXTRACTED", "source_snippet": "Acme dominates the global market.", "confidence": 0.95}
+          }
+        }
+      ]
+    }
+    """
+
+    packets = extract_from_chunks([chunk], runtime_schema(), client=FakeClient([raw]))
+
+    assert packets[0].fields["name"].status == "AMBIGUOUS"
+    assert packets[0].fields["name"].value is None
+    assert packets[0].fields["name"].source_snippet is None
+    assert packets[0].fields["name"].source_url == "https://example.com"
+
+
+def test_chunker_merges_small_sections_and_strips_boilerplate():
+    content = "\n\n".join(
+        ["Sign In", "![logo](https://example.com/logo.png)"]
+        + [
+            f"# Benefit {index}\n[Tier details](https://example.com/{index}) " + long_text("perk", 15)
+            for index in range(6)
+        ]
+    )
+    document = RawDocument(url="https://example.com/benefits", url_hash="abc", content=content, word_count=200)
+
+    chunks = semantic_chunk([document])
+
+    assert len(chunks) == 1
+    assert "Sign In" not in chunks[0].chunk_text
+    assert "https://example.com/logo.png" not in chunks[0].chunk_text
+    assert "Tier details" in chunks[0].chunk_text
+    assert "](https://example.com/0)" not in chunks[0].chunk_text
+    assert all(f"Benefit {index}" in chunks[0].chunk_text for index in range(6))
+
+
+def test_select_informative_chunks_prefers_field_coverage_over_score():
+    schema = SchemaConfig(
+        object_types=[
+            ObjectTypeDef(
+                object_type="Program",
+                fields=[
+                    FieldDef(name="earn_rate", description="Accrual amount per dollar"),
+                    FieldDef(name="expiry_policy", description="Validity duration before forfeiture"),
+                ],
+            )
+        ]
+    )
+    earn_a = SemanticChunk(
+        chunk_id="earn_a",
+        source_url="https://a.example",
+        chunk_text="Members earn 5 points per dollar spent on purchases. " * 3,
+    )
+    earn_b = SemanticChunk(
+        chunk_id="earn_b",
+        source_url="https://b.example",
+        chunk_text="Members earn 3 points per dollar spent on purchases. " * 2,
+    )
+    expiry = SemanticChunk(
+        chunk_id="expiry",
+        source_url="https://c.example",
+        chunk_text="Points expire after 24 months of inactivity under the expiry policy.",
+    )
+
+    selected, skipped = select_informative_chunks([earn_a, earn_b, expiry], schema, max_chunks=2, min_score=0)
+
+    assert {chunk.chunk_id for chunk in selected} == {"earn_a", "expiry"}
+    assert [chunk.chunk_id for chunk in skipped] == ["earn_b"]
+
+
+def test_field_report_aggregates_sources_and_statuses():
+    packet_a = NormalizedObjectPacket(
+        object_type="Company",
+        source_url="https://a.example",
+        chunk_id="c1",
+        identity_hash="h1",
+        fields={
+            "name": ExtractedField(
+                value="acme", status="EXTRACTED", source_url="https://a.example", source_snippet="Acme", confidence=0.8
+            ),
+            "employees": ExtractedField(value=None, status="AMBIGUOUS", source_url="https://a.example"),
+        },
+    )
+    packet_b = NormalizedObjectPacket(
+        object_type="Company",
+        source_url="https://b.example",
+        chunk_id="c2",
+        identity_hash="h2",
+        fields={
+            "name": ExtractedField(
+                value="acme", status="EXTRACTED", source_url="https://b.example", source_snippet="Acme", confidence=0.6
+            ),
+        },
+    )
+    packet_c = NormalizedObjectPacket(
+        object_type="Company",
+        source_url="https://c.example",
+        chunk_id="c3",
+        identity_hash="h3",
+        fields={
+            "name": ExtractedField(
+                value="acme inc",
+                status="EXTRACTED",
+                source_url="https://c.example",
+                source_snippet="Acme Inc",
+                confidence=0.99,
+            ),
+        },
+    )
+
+    report = build_field_report([packet_a, packet_b, packet_c], runtime_schema(), entity_name="Acme")
+
+    by_path = {entry.field_path: entry for entry in report.entries}
+    assert by_path["name"].status == "extracted"
+    assert by_path["name"].value == "acme"
+    assert by_path["name"].source_urls == ["https://a.example", "https://b.example"]
+    assert by_path["name"].corroboration_count == 2
+    assert by_path["employees"].status == "ambiguous"
+    assert by_path["employees"].source_urls == ["https://a.example"]
+    assert report.extracted_count == 1
+    assert report.ambiguous_count == 1
+    assert report.not_found_count == 0
+
+
+def test_ingest_node_returns_field_report_with_sources(tmp_path):
+    db_path = tmp_path / "kobie.sqlite3"
+    state = build_initial_state("Acme")
+    state["program_name"] = "Acme"
+    state["domain"] = "SaaS"
+    state["schema_config"] = runtime_schema().model_dump()
+    state["scraped_blocks"] = [
+        ScrapedUrlBlock(
+            url="https://example.com/acme",
+            canonical_url="https://example.com/acme",
+            content="# Acme\n\nAcme has 42 employees. " + long_text("evidence", 120),
+        )
+    ]
+    raw = """
+    {"objects":[{"object_type":"Company","fields":{"name":{"value":"Acme","status":"EXTRACTED","source_snippet":"Acme has 42 employees.","confidence":0.9}}}]}
+    """
+
+    update = ingest_node(state, extractor_client=FakeClient([raw]), db_path=db_path)
+
+    report = update["field_report"]
+    by_path = {entry.field_path: entry for entry in report.entries}
+    assert by_path["name"].status == "extracted"
+    assert by_path["name"].source_urls == ["https://example.com/acme"]
+    assert by_path["employees"].status == "not_found"
 
 
 def test_query_field_aliases_expand_to_focused_schema_paths():

@@ -121,6 +121,29 @@ def test_firecrawl_url_selection_prioritizes_high_value_sources(monkeypatch):
     assert [item.url for item in selected] == ["https://official.example", "https://terms.example"]
 
 
+def test_firecrawl_url_selection_covers_every_query_before_repeating(monkeypatch):
+    monkeypatch.setenv("MAX_FIRECRAWL_URLS", "4")
+
+    def retrieved(url, score, query_id, source_type):
+        return RetrievedUrl(url=url, canonical_url=url, score=score, query="q", query_id=query_id, source_type=source_type)
+
+    urls = [
+        retrieved("https://official.example/1", 0.95, "q_official", "official"),
+        retrieved("https://official.example/2", 0.94, "q_official", "official"),
+        retrieved("https://official.example/3", 0.93, "q_official", "official"),
+        retrieved("https://official.example/4", 0.92, "q_official", "official"),
+        retrieved("https://forum.example/1", 0.80, "q_forum", "forum"),
+        retrieved("https://review.example/1", 0.85, "q_review", "review"),
+        retrieved("https://financial.example/1", 0.90, "q_financial", "financial"),
+    ]
+
+    selected = graph.select_urls_for_firecrawl(urls)
+
+    assert len(selected) == 4
+    assert {item.query_id for item in selected} == {"q_official", "q_forum", "q_review", "q_financial"}
+    assert "https://official.example/1" in {item.url for item in selected}
+
+
 def test_graph_stops_after_input_validator_when_clarification_needed(monkeypatch):
     def fake_validate_conversation(messages):
         return ValidationResult.model_validate(
