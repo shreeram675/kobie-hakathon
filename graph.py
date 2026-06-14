@@ -12,7 +12,7 @@ from firecrawl_scraper import scrape_retrieved_urls
 from pipeline.nodes.ingest_node import ingest_node as post_firecrawl_ingest_node
 from query_generator import generate_queries
 from retrieval import retrieve_urls
-from schemas import AgentState, PipelineError, build_initial_state, now_iso
+from schemas import AgentState, PipelineError, build_initial_state, new_id, now_iso
 from validation import validate_conversation
 
 
@@ -182,6 +182,62 @@ def narrator_node(state: AgentState) -> dict:
         }
 
 
+def _build_debate_rounds(entry: dict) -> list[dict]:
+    """Convert flat debate transcript keys into DebateRound list for the frontend."""
+    debate = entry.get("debate") or {}
+    rounds = []
+    n = 1
+    for phase, agent, key in [
+        ("opening",  "Advocate A", "argument_a"),
+        ("opening_b","Advocate B", "argument_b"),
+        ("cross",    "Advocate A", "rebuttal_a"),
+        ("cross_b",  "Advocate B", "rebuttal_b"),
+    ]:
+        text = debate.get(key) or ""
+        if text.strip():
+            rounds.append({"round": n, "phase": phase, "agent": agent, "argument": text})
+            n += 1
+    reasoning = entry.get("reasoning") or debate.get("reasoning") or ""
+    if reasoning.strip():
+        rounds.append({"round": n, "phase": "final_decision", "agent": "Judge", "argument": reasoning})
+    return rounds
+
+
+def _shape_adjudicated(adjudicated: list[dict], conflict_records: list[dict]) -> list[dict]:
+    """Map flat adjudicator output → AdjudicatedClaim shape the frontend expects."""
+    cr_by_field = {cr.get("field_path", ""): cr for cr in conflict_records}
+    seen: set[str] = set()
+    result = []
+    for entry in adjudicated:
+        field = entry.get("field_name", "")
+        if field in seen:
+            continue  # FLAG creates two entries per field; keep first
+        seen.add(field)
+        cr = cr_by_field.get(field, {})
+        resolution = entry.get("resolution", "")
+        winner = entry.get("winner", "FLAG")
+        if resolution == "flag" or winner == "FLAG":
+            res_status = "manual_review_needed"
+        elif resolution == "auto":
+            res_status = "auto_resolved"
+        else:
+            res_status = cr.get("resolution_status", "debate_required")
+        rounds = _build_debate_rounds(entry)
+        if not rounds and entry.get("reasoning"):
+            rounds = [{"round": 1, "phase": "final_decision", "agent": "Judge",
+                       "argument": entry["reasoning"]}]
+        result.append({
+            "conflict_id": cr.get("conflict_id") or new_id("conflict"),
+            "field_path": field,
+            "resolution_status": res_status,
+            "winning_claim_id": None,
+            "decision": winner,
+            "rounds": rounds,
+            "confidence": float(entry.get("confidence") or 0.0),
+        })
+    return result
+
+
 def adjudication_node(state: AgentState) -> dict:
     """Detect conflicting extracted claims and resolve them via debate."""
 
@@ -189,9 +245,12 @@ def adjudication_node(state: AgentState) -> dict:
         from adjudication.conflict_adjudicator import adjudicator_node
 
         updated = adjudicator_node(state)
+        raw_adj = updated.get("adjudicated", [])
+        conflict_records = updated.get("conflicts", [])
         return {
-            "conflicts": updated.get("conflicts", []),
-            "adjudicated": updated.get("adjudicated", []),
+            "conflicts": conflict_records,
+            "adjudicated": _shape_adjudicated(raw_adj, conflict_records),
+            "extracted_claims": updated.get("extracted_claims", []),
             "field_report": updated.get("field_report"),
             "human_review_queue": updated.get("human_review_queue", []),
             "updated_at": now_iso(),

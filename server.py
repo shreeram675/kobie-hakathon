@@ -828,7 +828,7 @@ class CreateRunBody(_PydanticBase):
     user_input: str
     mode: str = "single"
     user_input_b: str | None = None
-    mock: bool = True  # default to mock to avoid expensive API calls
+    mock: bool = False
 
 
 class ConverseRequest(_PydanticBase):
