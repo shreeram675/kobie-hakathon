@@ -459,6 +459,276 @@ _MOCK_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+from datetime import date as _date
+
+_TODAY = str(_date.today())
+
+# Raw conflicts injected into state["conflicts"] before adjudication_node runs.
+# claim_a / claim_b must match the dict shape produced by _claim_from_group():
+#   value, source_url, date, authority, corroboration, confidence
+# Score gap ≤ 0.20  → real Groq debate  |  gap > 0.20 → auto-resolved
+_MOCK_CONFLICTS: dict[str, list[dict[str, Any]]] = {
+    "delta skymiles": [
+        # ① Close gap → real debate
+        {
+            "field_name": "burn_mechanics.point_value_cpp",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "~1.3 cents per mile (based on flight redemptions)",
+                "source_url": "https://thepointsguy.com/guide/monthly-valuations/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 3,
+                "confidence": 0.74,
+            },
+            "claim_b": {
+                "value": "~0.9–1.1 cents per mile (average across all redemptions)",
+                "source_url": "https://nerdwallet.com/article/travel/delta-skymiles-value",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.68,
+            },
+        },
+        # ② Close gap → real debate
+        {
+            "field_name": "earn_mechanics.base_earn_rate",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "5 miles per $1 on Delta flights (Main Cabin)",
+                "source_url": "https://www.delta.com/us/en/skymiles/how-to-earn-miles",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.93,
+            },
+            "claim_b": {
+                "value": "5–10 miles per $1 depending on fare class and Medallion status",
+                "source_url": "https://thepointsguy.com/guide/delta-skymiles-earning/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.80,
+            },
+        },
+        # ③ Wide gap → auto-resolved
+        {
+            "field_name": "burn_mechanics.expiry_policy",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "Miles never expire",
+                "source_url": "https://old-blog.example.com/delta-miles-expire",
+                "date": "2019-01-15",
+                "authority": "blog",
+                "corroboration": 1,
+                "confidence": 0.30,
+            },
+            "claim_b": {
+                "value": "Miles expire after 24 months of account inactivity",
+                "source_url": "https://www.delta.com/us/en/skymiles/skymiles-program-overview",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 3,
+                "confidence": 0.91,
+            },
+        },
+        # ④ Close gap → real debate
+        {
+            "field_name": "tier_system.tier_thresholds",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "Silver: $3,000 MQD; Gold: $8,000 MQD; Platinum: $12,000 MQD; Diamond: $20,000 MQD",
+                "source_url": "https://www.delta.com/us/en/skymiles/medallion-program",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 3,
+                "confidence": 0.88,
+            },
+            "claim_b": {
+                "value": "Silver: $3,000 MQD; Gold: $8,000 MQD; Platinum: $15,000 MQD; Diamond: $28,000 MQD (2024 revised)",
+                "source_url": "https://thepointsguy.com/news/delta-medallion-2024-changes/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.76,
+            },
+        },
+    ],
+    "marriott bonvoy": [
+        # ① Close gap → real debate
+        {
+            "field_name": "burn_mechanics.point_value_cpp",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "~0.9 cents per point on free night redemptions",
+                "source_url": "https://thepointsguy.com/guide/monthly-valuations/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 3,
+                "confidence": 0.77,
+            },
+            "claim_b": {
+                "value": "~0.7 cents per point (average across all redemption types)",
+                "source_url": "https://nerdwallet.com/article/travel/marriott-bonvoy-points-value",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.68,
+            },
+        },
+        # ② Close gap → real debate
+        {
+            "field_name": "tier_system.qualification_criteria",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "Nights only: Silver 10, Gold 25, Platinum 50, Titanium 75, Ambassador 100",
+                "source_url": "https://www.marriott.com/loyalty/member-benefits/eliteMemberBenefits.mi",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.91,
+            },
+            "claim_b": {
+                "value": "Nights or revenue: Silver 10 nights or $3,000; Gold 25 nights or $10,000 spend",
+                "source_url": "https://thepointsguy.com/guide/marriott-bonvoy-status/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.78,
+            },
+        },
+        # ③ Wide gap → auto-resolved
+        {
+            "field_name": "burn_mechanics.expiry_policy",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "Points expire after 12 months of inactivity",
+                "source_url": "https://old-travel-blog.example.com/bonvoy-expiry",
+                "date": "2020-03-10",
+                "authority": "blog",
+                "corroboration": 1,
+                "confidence": 0.35,
+            },
+            "claim_b": {
+                "value": "Points expire after 24 months of account inactivity",
+                "source_url": "https://www.marriott.com/loyalty/terms/default.mi",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.95,
+            },
+        },
+        # ④ Close gap → real debate
+        {
+            "field_name": "partnerships.transfer_ratios",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "3:1 Marriott points to airline miles (e.g. 3,000 pts = 1,000 miles)",
+                "source_url": "https://www.marriott.com/loyalty/redeem/travel/air.mi",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.89,
+            },
+            "claim_b": {
+                "value": "3:1 ratio with a 5,000-mile bonus per 60,000-point transfer block",
+                "source_url": "https://thepointsguy.com/guide/transfer-marriott-to-airlines/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 3,
+                "confidence": 0.82,
+            },
+        },
+    ],
+    "hilton honors": [
+        # ① Close gap → real debate
+        {
+            "field_name": "burn_mechanics.point_value_cpp",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "~0.6 cents per point for standard room redemptions",
+                "source_url": "https://thepointsguy.com/guide/monthly-valuations/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 3,
+                "confidence": 0.72,
+            },
+            "claim_b": {
+                "value": "~0.5 cents per point on average across all redemption types",
+                "source_url": "https://nerdwallet.com/article/travel/hilton-honors-points-value",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.65,
+            },
+        },
+        # ② Close gap → real debate
+        {
+            "field_name": "tier_system.tier_benefits",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "Diamond: complimentary breakfast, executive lounge, 100% bonus points, suite upgrades",
+                "source_url": "https://www.hilton.com/en/hilton-honors/member-benefits/",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.90,
+            },
+            "claim_b": {
+                "value": "Diamond: breakfast at select properties only; lounge access not guaranteed at all brands",
+                "source_url": "https://thepointsguy.com/guide/hilton-diamond-benefits/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 3,
+                "confidence": 0.78,
+            },
+        },
+        # ③ Wide gap → auto-resolved
+        {
+            "field_name": "burn_mechanics.expiry_policy",
+            "volatility": "LOW",
+            "claim_a": {
+                "value": "Points expire after 24 months of inactivity",
+                "source_url": "https://old-hilton-blog.example.com/expiry",
+                "date": "2018-06-01",
+                "authority": "blog",
+                "corroboration": 1,
+                "confidence": 0.28,
+            },
+            "claim_b": {
+                "value": "Points expire after 12 months of account inactivity",
+                "source_url": "https://www.hilton.com/en/hilton-honors/terms-conditions/",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 4,
+                "confidence": 0.94,
+            },
+        },
+        # ④ Close gap → real debate
+        {
+            "field_name": "earn_mechanics.base_earn_rate",
+            "volatility": "HIGH",
+            "claim_a": {
+                "value": "10 points per $1 spent at Hilton portfolio properties",
+                "source_url": "https://www.hilton.com/en/hilton-honors/earn-points/",
+                "date": _TODAY,
+                "authority": "official",
+                "corroboration": 5,
+                "confidence": 0.95,
+            },
+            "claim_b": {
+                "value": "10 base points per $1 plus 5x bonus points = 15 points per $1 effective rate",
+                "source_url": "https://thepointsguy.com/guide/hilton-honors-earn/",
+                "date": _TODAY,
+                "authority": "blog",
+                "corroboration": 2,
+                "confidence": 0.80,
+            },
+        },
+    ],
+}
+
+
 def _fuzzy_match_profile(user_input: str) -> str | None:
     """Match user input to a known mock profile key."""
     needle = user_input.lower().strip()
@@ -517,11 +787,12 @@ def _run_mock_pipeline(record: RunRecord) -> None:
 
     _mark(record, "claims", "running")
     field_report = _build_mock_field_report(program_key)
+    raw_conflicts = _MOCK_CONFLICTS.get(program_key, [])
     _apply(record, {
         "program_name": profile["program_name"],
         "brand": profile["brand"],
         "field_report": field_report,
-        "conflicts": [],
+        "conflicts": raw_conflicts,   # real adjudication/debate runs from here
         "adjudicated": [],
     })
     _mark(record, "claims", "done")
