@@ -22,7 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ComparisonTable } from "@/components/ComparisonTable";
 import { CategoryWinnerGrid } from "@/components/CategoryWinnerGrid";
-import { DebateTimeline } from "@/components/DebateTimeline";
 import { DataQualityGauge } from "@/components/charts/DataQualityGauge";
 import { useRun } from "@/lib/hooks";
 import { cn, pct, signed, renderValue } from "@/lib/format";
@@ -190,13 +189,6 @@ function TwoProgramView({ runId, state }: { runId: string; state: AgentState }) 
 
       <RecommendationCard verdict={verdict} />
 
-      <div>
-        <h2 className="mb-3 text-base font-semibold text-navy">Adversarial debate</h2>
-        <DebateTimeline
-          adjudicated={state.adjudicated ?? []}
-          labels={{ a: comparison.program_a, b: comparison.program_b }}
-        />
-      </div>
     </div>
   );
 }

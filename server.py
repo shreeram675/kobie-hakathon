@@ -419,6 +419,12 @@ def run_pipeline(record: RunRecord) -> None:
                 pass
             with record.lock:
                 record.compare_b = record.program_states[done_indices[1]]
+                # Restore main state to program A so the API response correctly
+                # represents program A (record.state was last set to program B's state).
+                comparison_output = record.state.get("comparison_output")
+                state_a = record.program_states[done_indices[0]]
+                if state_a is not None:
+                    record.state = {**state_a, "comparison_output": comparison_output}
 
         with record.lock:
             # Mark any stage still showing "running" as failed
@@ -960,6 +966,10 @@ def _run_mock_pipeline(record: RunRecord) -> None:
                 pass
             with record.lock:
                 record.compare_b = record.program_states[done_indices[1]]
+                comparison_output = record.state.get("comparison_output")
+                state_a = record.program_states[done_indices[0]]
+                if state_a is not None:
+                    record.state = {**state_a, "comparison_output": comparison_output}
 
         with record.lock:
             record.run_status = "done"
