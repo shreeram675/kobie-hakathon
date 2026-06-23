@@ -128,12 +128,14 @@ export interface ScrapedUrlBlock {
   title: string | null;
   scrape_status: ScrapeStatus;
   error: string | null;
+  is_fallback: boolean;
 }
 
 export interface FirecrawlScrapeOutput {
   total_urls: number;
   successful_scrapes: number;
   failed_scrapes: number;
+  fallback_scrapes: number;
   blocks: ScrapedUrlBlock[];
 }
 
@@ -387,11 +389,30 @@ export interface AgentState {
   /** Whichever stage the pipeline is currently working. */
   active_stage: string | null;
   /** Coarse lifecycle of the whole run. */
-  status: "running" | "done" | "error" | "clarification_needed";
+  status: "running" | "done" | "error" | "clarification_needed" | "cancelled";
   /** Conversation history for converse mode. */
   conversation?: ConverseTurn[];
   /** compare mode: the second program's full state (UI-only convenience). */
   compare_b?: AgentState | null;
+  /** compare mode: full multi-program queue info (available for all comparison runs). */
+  comparison_run?: ComparisonRunInfo | null;
+  /** Live API cost ledger for the run. */
+  cost_report?: CostReport | null;
+}
+
+// ---- Multi-program comparison run tracking ----
+
+export type ProgramStatus = "pending" | "running" | "done" | "error";
+
+export interface ComparisonRunInfo {
+  programs: string[];
+  current_program_index: number;
+  total_programs: number;
+  program_statuses: ProgramStatus[];
+  /** Serialised AgentState for each completed program (null while pending/running). */
+  program_states: Array<AgentState | null>;
+  /** Per-program stage status snapshot (available once program completes). */
+  program_stage_statuses: Array<Record<string, StageStatus>>;
 }
 
 // ---- API payloads ----
@@ -399,8 +420,10 @@ export interface AgentState {
 export interface CreateRunBody {
   user_input: string;
   mode: RunMode;
-  /** compare mode: optional explicit second program prompt. */
+  /** compare mode: optional explicit second program prompt (legacy 2-program). */
   user_input_b?: string;
+  /** compare mode: explicit list of programs (supersedes user_input_b when provided). */
+  programs?: string[];
 }
 
 export interface CreateRunResponse {
@@ -412,10 +435,31 @@ export interface RunSummary {
   user_input: string;
   mode: RunMode;
   data_quality: number;
-  status: AgentState["status"];
+  status: "running" | "done" | "error" | "clarification_needed" | "cancelled";
   created_at: string;
 }
 
 export interface ConverseRequest {
   message: string;
+}
+
+// ---- Cost tracking ----
+
+export interface CostReportLine {
+  provider: string;
+  stage: string;
+  calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  usd_cost: number;
+}
+
+export interface CostReport {
+  lines: CostReportLine[];
+  total_calls: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  total_usd_cost: number;
 }

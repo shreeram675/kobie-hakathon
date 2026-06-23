@@ -45,6 +45,11 @@ export async function postConverse(
   return asJson<ConverseAnswer>(res);
 }
 
+export async function stopRun(runId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`/api/run/${runId}/stop`, { method: "POST" });
+  return asJson<{ ok: boolean }>(res);
+}
+
 export async function postClarify(
   runId: string,
   answer: string,

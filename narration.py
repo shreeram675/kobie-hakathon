@@ -6,6 +6,7 @@ import time
 
 import requests
 
+import cost_tracker
 from providers import provider_for_stage
 from schemas import AgentState, BriefOutput, FieldReport, PipelineError, SchemaCoverage, new_id, now_iso
 
@@ -227,6 +228,14 @@ def _call_gemini(prompt: str, max_retries: int = 2) -> str:
         if response.status_code not in _TRANSIENT_STATUS_CODES:
             response.raise_for_status()
             payload = response.json()
+            usage = payload.get("usageMetadata", {})
+            ledger = cost_tracker.get_current_ledger()
+            if ledger:
+                ledger.record_gemini(
+                    "narration",
+                    int(usage.get("promptTokenCount") or 0),
+                    int(usage.get("candidatesTokenCount") or 0),
+                )
             return payload["candidates"][0]["content"]["parts"][0]["text"].strip()
 
         last_error = requests.HTTPError(

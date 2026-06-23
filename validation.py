@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import requests
 
+import cost_tracker
 from providers import provider_for_stage
 from schemas import ClarificationOption, ProgramIdentity, ValidationResult
 
@@ -168,6 +169,10 @@ class OpenAICompatibleChatClient:
         )
         response.raise_for_status()
         payload = response.json()
+        usage = payload.get("usage", {})
+        ledger = cost_tracker.get_current_ledger()
+        if ledger and (usage.get("prompt_tokens") or usage.get("completion_tokens")):
+            ledger.record_gemini("validation", int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0))
         content = payload["choices"][0]["message"]["content"]
         return parse_json_content(content)
 
