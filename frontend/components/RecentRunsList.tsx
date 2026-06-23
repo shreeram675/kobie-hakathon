@@ -118,8 +118,16 @@ export function RecentRunsList() {
                         <CheckCircle2 className="h-3 w-3" />
                         {pct(run.data_quality)}
                       </span>
-                    ) : (
+                    ) : run.status === "cancelled" ? (
                       <Badge tone="amber" dot className="hidden shrink-0 sm:inline-flex text-[10px]">
+                        stopped
+                      </Badge>
+                    ) : run.status === "error" ? (
+                      <Badge tone="red" dot className="hidden shrink-0 sm:inline-flex text-[10px]">
+                        error
+                      </Badge>
+                    ) : (
+                      <Badge tone="teal" dot className="hidden shrink-0 sm:inline-flex text-[10px]">
                         running
                       </Badge>
                     )}

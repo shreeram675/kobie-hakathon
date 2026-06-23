@@ -59,6 +59,7 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
   const stop = useStopRun(runId);
   const retry = useRetryRun();
   const [focused, setFocused] = useState<StageId | null>(null);
+  const [selectedProgramIdx, setSelectedProgramIdx] = useState(0);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -179,28 +180,44 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
                 const isDone = progStatus === "done";
                 const progState = compRun.program_states[idx] as AgentState | null;
                 const effectiveState = isActive ? state : progState;
+                const isSelected = state.status === "done" && idx === selectedProgramIdx;
+                const isClickable = isDone && state.status === "done";
 
                 return (
-                  <div key={idx} className={cn("relative flex-1 min-h-[280px]", isActive && "bg-[#f8fdfd]")}>
+                  <div
+                    key={idx}
+                    className={cn(
+                      "relative flex-1 min-h-[280px] transition-colors duration-200",
+                      isActive && "bg-[#f8fdfd]",
+                      isSelected && "ring-2 ring-inset ring-teal/30",
+                      isClickable && !isSelected && "cursor-pointer hover:bg-soft-grey/20",
+                    )}
+                    onClick={isClickable ? () => { setSelectedProgramIdx(idx); setFocused(null); } : undefined}
+                  >
                     {/* Program label banner */}
                     <div className={cn(
                       "flex items-center gap-2 px-3 py-1.5 border-b border-line/50 text-[10px] font-semibold",
-                      isActive ? "bg-teal/8 text-teal" : isDone ? "bg-green/8 text-green" : "bg-soft-grey/50 text-ink/40"
+                      isSelected ? "bg-teal/10 text-teal" : isActive ? "bg-teal/8 text-teal" : isDone ? "bg-green/8 text-green" : "bg-soft-grey/50 text-ink/40"
                     )}>
                       <span className={cn(
                         "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold border",
-                        isActive ? "bg-teal/20 border-teal/30 text-teal" : isDone ? "bg-green/20 border-green/30 text-green" : "bg-ink/8 border-ink/15 text-ink/40"
+                        isSelected ? "bg-teal/30 border-teal/50 text-teal" : isActive ? "bg-teal/20 border-teal/30 text-teal" : isDone ? "bg-green/20 border-green/30 text-green" : "bg-ink/8 border-ink/15 text-ink/40"
                       )}>
                         {String.fromCharCode(65 + idx)}
                       </span>
                       <span className="truncate max-w-[160px]">{prog}</span>
                       {isActive && <Loader2 className="h-3 w-3 animate-spin ml-auto" />}
-                      {isDone && <Check className="h-3 w-3 ml-auto" />}
+                      {isDone && !isSelected && <Check className="h-3 w-3 ml-auto" />}
+                      {isSelected && <span className="ml-auto text-[9px] font-semibold bg-teal/15 text-teal px-1.5 py-0.5 rounded">Viewing</span>}
                       {progStatus === "pending" && <span className="ml-auto text-ink/30">Waiting…</span>}
                     </div>
 
                     {effectiveState ? (
-                      <PipelineGraph state={effectiveState} focused={focused} onFocus={setFocused} />
+                      <PipelineGraph
+                        state={effectiveState}
+                        focused={isSelected ? focused : null}
+                        onFocus={isSelected ? setFocused : () => { setSelectedProgramIdx(idx); setFocused(null); }}
+                      />
                     ) : (
                       <div className="flex h-full items-center justify-center text-[11px] text-ink/25 py-10">
                         {progStatus === "pending" ? "Queued — will start after previous program completes" : "No data"}
@@ -293,7 +310,24 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
                 />
               )}
 
-            <StageDetailPanel state={state} focusedStage={focused} />
+            {/* ── Program switcher (comparison + done) ── */}
+            {isComparison && compRun && state.status === "done" && (
+              <ProgramSwitcher
+                programs={compRun.programs}
+                programStatuses={compRun.program_statuses as string[]}
+                selectedIdx={selectedProgramIdx}
+                onSelect={(idx) => { setSelectedProgramIdx(idx); setFocused(null); }}
+              />
+            )}
+
+            <StageDetailPanel
+              state={
+                isComparison && compRun && state.status === "done"
+                  ? (compRun.program_states[selectedProgramIdx] as AgentState ?? state)
+                  : state
+              }
+              focusedStage={focused}
+            />
 
             {state.mode === "converse" && (
               <section id="converse" className="scroll-mt-4">
@@ -636,6 +670,82 @@ function CancelledBanner({
           )}
           {isPending ? "Starting…" : "Retry from start"}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Program switcher tabs ─────────────────────────────────────────────────────
+
+const SWITCHER_ACCENT = [
+  { bg: "bg-teal/15 border-teal/35 text-teal", dot: "bg-teal", ring: "ring-teal/30" },
+  { bg: "bg-blue/15 border-blue/35 text-blue", dot: "bg-blue", ring: "ring-blue/30" },
+  { bg: "bg-navy/15 border-navy/35 text-navy", dot: "bg-navy", ring: "ring-navy/30" },
+  { bg: "bg-green/15 border-green/35 text-green", dot: "bg-green", ring: "ring-green/30" },
+  { bg: "bg-amber/15 border-amber/35 text-amber", dot: "bg-amber", ring: "ring-amber/30" },
+];
+
+function ProgramSwitcher({
+  programs,
+  programStatuses,
+  selectedIdx,
+  onSelect,
+}: {
+  programs: string[];
+  programStatuses: string[];
+  selectedIdx: number;
+  onSelect: (idx: number) => void;
+}) {
+  return (
+    <div className="rounded-[10px] border border-line bg-white shadow-sm overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-line bg-soft-grey/30">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-ink/45">
+          View pipeline results for
+        </span>
+      </div>
+      <div className="flex divide-x divide-line">
+        {programs.map((prog, idx) => {
+          const c = SWITCHER_ACCENT[idx % SWITCHER_ACCENT.length];
+          const isSelected = idx === selectedIdx;
+          const isDone = programStatuses[idx] === "done";
+          return (
+            <button
+              key={idx}
+              onClick={() => onSelect(idx)}
+              className={cn(
+                "flex-1 flex items-center gap-2.5 px-4 py-3 text-left transition-all duration-150",
+                isSelected ? cn("bg-white", c.bg.replace("bg-", "bg-").replace("/15", "/8")) : "hover:bg-soft-grey/40",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold transition-all",
+                  isSelected ? cn(c.bg, "ring-2", c.ring) : "bg-ink/6 border-ink/15 text-ink/40",
+                )}
+              >
+                {String.fromCharCode(65 + idx)}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p
+                  className={cn(
+                    "truncate text-[12px] font-semibold leading-tight",
+                    isSelected ? "text-navy" : "text-ink/50",
+                  )}
+                >
+                  {prog}
+                </p>
+                {isDone && (
+                  <p className="text-[10px] text-ink/35 mt-0.5">
+                    {isSelected ? "Showing pipeline" : "Click to view"}
+                  </p>
+                )}
+              </div>
+              {isSelected && (
+                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", c.dot)} />
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
