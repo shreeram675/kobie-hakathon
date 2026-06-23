@@ -34,7 +34,9 @@ export function RunModeTab({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-xs font-medium transition-all",
               active
-                ? "bg-teal text-white shadow-sm"
+                ? id === "single"
+                  ? "bg-[#F47920] text-white shadow-sm shadow-[#F47920]/30"
+                  : "bg-[#1a3a5c] text-white shadow-sm shadow-[#1a3a5c]/30"
                 : "text-white/60 hover:bg-white/10 hover:text-white",
             )}
           >

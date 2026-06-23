@@ -8,11 +8,11 @@ from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
 
-from firecrawl_scraper import scrape_retrieved_urls, ForbiddenError
+from firecrawl_scraper import scrape_retrieved_urls
 from pipeline.nodes.ingest_node import ingest_node as post_firecrawl_ingest_node
 from query_generator import generate_queries
 from retrieval import retrieve_urls
-from schemas import AgentState, PipelineError, build_initial_state, new_id, now_iso
+from schemas import AgentState, FirecrawlScrapeOutput, PipelineError, build_initial_state, new_id, now_iso
 from validation import validate_conversation
 
 
@@ -116,8 +116,8 @@ def retrieval_node(state: AgentState) -> dict:
 
 def firecrawl_node(state: AgentState, on_progress=None) -> dict:
     all_retrieved = state.get("retrieved_urls", [])
-    urls = select_urls_for_firecrawl(all_retrieved)
-    if not urls:
+    ordered = select_urls_for_firecrawl(all_retrieved)
+    if not ordered:
         return {
             "errors": [
                 *state["errors"],
@@ -126,8 +126,10 @@ def firecrawl_node(state: AgentState, on_progress=None) -> dict:
             "updated_at": now_iso(),
         }
 
+    batch = ordered[:20]
+
     try:
-        firecrawl_result = scrape_retrieved_urls(urls, on_progress=on_progress)
+        batch_result = scrape_retrieved_urls(batch, on_progress=on_progress)
     except Exception as exc:
         return {
             "errors": [
@@ -137,40 +139,18 @@ def firecrawl_node(state: AgentState, on_progress=None) -> dict:
             "updated_at": now_iso(),
         }
 
-    # Replace forbidden URLs with fallbacks from the unselected pool (priority order).
-    selected_canonicals = {u.canonical_url for u in urls}
-    fallback_pool = [u for u in all_retrieved if u.canonical_url not in selected_canonicals]
-    forbidden_indices = [i for i, b in enumerate(firecrawl_result.blocks) if b.scrape_status == "forbidden"]
-
-    if forbidden_indices and fallback_pool:
-        fallbacks_to_try = fallback_pool[: len(forbidden_indices)]
-        fallback_result = scrape_retrieved_urls(fallbacks_to_try)
-        for slot_idx, fallback_block in zip(forbidden_indices, fallback_result.blocks):
-            firecrawl_result.blocks[slot_idx] = fallback_block
-
-        successful = sum(1 for b in firecrawl_result.blocks if b.scrape_status == "success" and b.content)
-        firecrawl_result.successful_scrapes = successful
-        firecrawl_result.failed_scrapes = firecrawl_result.total_urls - successful
-
-    all_failed = firecrawl_result.total_urls > 0 and firecrawl_result.successful_scrapes == 0
-    failed_message = _firecrawl_all_failed_message(firecrawl_result) if all_failed else None
+    successes = sum(1 for b in batch_result.blocks if b.scrape_status == "success" and b.content)
+    firecrawl_result = FirecrawlScrapeOutput(
+        total_urls=len(batch_result.blocks),
+        successful_scrapes=successes,
+        failed_scrapes=len(batch_result.blocks) - successes,
+        blocks=batch_result.blocks,
+    )
 
     return {
         "firecrawl_result": firecrawl_result,
         "scraped_blocks": firecrawl_result.blocks,
-        "errors": [
-            *state["errors"],
-            *(
-                [
-                    PipelineError(
-                        stage="firecrawl_scraper",
-                        message=failed_message or "Firecrawl failed for every retrieved URL.",
-                    )
-                ]
-                if all_failed
-                else []
-            ),
-        ],
+        "errors": state["errors"],
         "updated_at": now_iso(),
     }
 
@@ -435,27 +415,17 @@ def _latest_error_message(state: AgentState, fallback: str) -> str:
 
 
 def select_urls_for_firecrawl(urls) -> list:
-    """Limit Firecrawl spend while keeping every query's field coverage.
+    """Return all retrieved URLs in coverage-aware priority order.
 
-    URLs are grouped per originating query and taken round-robin (best URL of
-    each query first), so a small scrape budget still covers sentiment, news,
-    financial, and competitive queries instead of only official pages. Query
-    groups are interleaved by source type so each source class survives a
-    budget smaller than the query count.
+    URLs are grouped per originating query and interleaved round-robin across
+    source types so the caller can take the first N and still get broad field
+    coverage (official, terms, financial, review, forum, etc.) rather than
+    many URLs from a single high-scoring query.
 
-    A hard floor of MIN_CONSUMER_URLS is reserved for consumer-facing source types
-    (review / forum / app_reviews) so sentiment and app-ratings evidence always
-    reaches the extraction stage regardless of Tavily relevance scores.
+    The caller takes the first N from the returned list.
     """
-
-    max_urls = _env_int("MAX_FIRECRAWL_URLS", 12)
-    if max_urls <= 0 or len(urls) <= max_urls:
-        return list(urls)
-
-    # Source types that carry consumer evidence (sentiment, app ratings, forum threads).
-    _CONSUMER_SOURCE_TYPES = frozenset({"review", "forum", "forums", "app_reviews"})
-    # Reserve slots proportional to budget (1 per 6 URLs, min 0 so tiny budgets are unaffected).
-    min_consumer = max_urls // 6
+    if not urls:
+        return []
 
     priority = {
         "official": 0,
@@ -475,28 +445,12 @@ def select_urls_for_firecrawl(urls) -> list:
     def url_rank(item):
         return (priority.get(str(item.source_type).lower(), 50), -float(item.score or 0))
 
-    # Split pool into consumer and non-consumer early so the floor can be enforced.
-    consumer_pool = sorted(
-        [u for u in urls if str(u.source_type).lower() in _CONSUMER_SOURCE_TYPES],
-        key=url_rank,
-    )
-    non_consumer_pool = [u for u in urls if str(u.source_type).lower() not in _CONSUMER_SOURCE_TYPES]
-
-    # Reserve up to min_consumer slots from the consumer pool.
-    reserved_consumer = consumer_pool[:min_consumer]
-    remaining_consumer = consumer_pool[min_consumer:]
-
-    # Fill the non-reserved budget using the existing round-robin logic over non-consumer
-    # URLs plus any overflow consumer URLs.
-    remaining_budget = max_urls - len(reserved_consumer)
-    candidates = non_consumer_pool + remaining_consumer
-
     groups: dict[str, list] = {}
-    for item in sorted(candidates, key=url_rank):
+    for item in sorted(urls, key=url_rank):
         groups.setdefault(str(item.query_id), []).append(item)
 
     groups_by_type: dict[str, list[list]] = {}
-    for group in sorted(groups.values(), key=lambda group: url_rank(group[0])):
+    for group in sorted(groups.values(), key=lambda g: url_rank(g[0])):
         groups_by_type.setdefault(str(group[0].source_type).lower(), []).append(group)
 
     ordered_groups: list[list] = []
@@ -509,18 +463,16 @@ def select_urls_for_firecrawl(urls) -> list:
                 remaining_queues.append(queue)
         type_queues = remaining_queues
 
-    round_robin_selected: list = []
-    while ordered_groups and len(round_robin_selected) < remaining_budget:
+    result: list = []
+    while ordered_groups:
         remaining_groups = []
         for group in ordered_groups:
-            if len(round_robin_selected) >= remaining_budget:
-                break
-            round_robin_selected.append(group.pop(0))
+            result.append(group.pop(0))
             if group:
                 remaining_groups.append(group)
         ordered_groups = remaining_groups
 
-    return reserved_consumer + round_robin_selected
+    return result
 
 
 def _env_int(name: str, default: int) -> int:
@@ -528,22 +480,3 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
-
-
-def _firecrawl_all_failed_message(firecrawl_result) -> str:
-    errors = [block.error for block in firecrawl_result.blocks if block.error]
-    if not errors:
-        return "Firecrawl failed for every retrieved URL."
-
-    first_error = errors[0]
-    if "Insufficient Credits" in first_error or "Insufficient credits" in first_error:
-        return (
-            "Firecrawl credentials are valid, but Firecrawl returned insufficient credits. "
-            "Add credits or upgrade the Firecrawl plan, then retry."
-        )
-    if "403 Forbidden" in first_error:
-        return (
-            "Firecrawl returned 403 Forbidden for every URL. Check Firecrawl plan permissions, "
-            "workspace access, and FIRECRAWL_API_BASE."
-        )
-    return f"Firecrawl failed for every URL. First error: {first_error}"

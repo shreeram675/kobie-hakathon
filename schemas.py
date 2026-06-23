@@ -237,6 +237,10 @@ class SemanticChunk(KobieModel):
     source_url: str
     target_fields: list[str] = Field(default_factory=list)
     source_type: str | None = None
+    # Traceability: which search query produced the document this chunk came from,
+    # and the ordinal position of this chunk within that document.
+    query_id: str | None = None
+    chunk_index: int | None = None
 
 
 class ExtractedField(KobieModel):

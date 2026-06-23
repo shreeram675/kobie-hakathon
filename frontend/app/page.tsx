@@ -9,6 +9,8 @@ import {
   TrendingUp,
   Shield,
   Zap,
+  Plus,
+  X,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { RunModeTab } from "@/components/RunModeTab";
@@ -17,8 +19,17 @@ import { Button } from "@/components/ui/button";
 import { Textarea, Input } from "@/components/ui/textarea";
 import { useCreateRun } from "@/lib/hooks";
 import type { RunMode } from "@/lib/types";
+import { cn } from "@/lib/format";
 
 const EXAMPLES = ["Marriott Bonvoy", "Hilton Honors", "Delta SkyMiles", "World of Hyatt"];
+
+const PROGRAM_COLORS = [
+  { label: "A", bg: "bg-teal/10", text: "text-teal", border: "border-teal/30", ring: "ring-teal/30" },
+  { label: "B", bg: "bg-blue/10", text: "text-blue", border: "border-blue/30", ring: "ring-blue/30" },
+  { label: "C", bg: "bg-navy/10", text: "text-navy", border: "border-navy/30", ring: "ring-navy/30" },
+  { label: "D", bg: "bg-green/10", text: "text-green", border: "border-green/30", ring: "ring-green/30" },
+  { label: "E", bg: "bg-amber/10", text: "text-amber", border: "border-amber/30", ring: "ring-amber/30" },
+];
 
 const MODE_DETAIL: Record<RunMode, { title: string; sub: string; cta: string }> = {
   single: {
@@ -28,7 +39,7 @@ const MODE_DETAIL: Record<RunMode, { title: string; sub: string; cta: string }> 
   },
   compare: {
     title: "Side-by-Side Comparison",
-    sub: "Run both programs through the pipeline and surface field-by-field differences with a winner grid.",
+    sub: "Run each program sequentially through the full pipeline, then surface a field-by-field comparison with insights.",
     cta: "Run comparison",
   },
   converse: {
@@ -47,22 +58,54 @@ const CAPABILITY_CHIPS = [
 export default function HomePage() {
   const [mode, setMode] = useState<RunMode>("single");
   const [input, setInput] = useState("");
-  const [inputB, setInputB] = useState("");
+  const [programs, setPrograms] = useState<string[]>(["", ""]);
   const create = useCreateRun();
 
   const detail = MODE_DETAIL[mode];
+
   const canSubmit =
     mode === "compare"
-      ? input.trim() && inputB.trim()
+      ? programs.filter((p) => p.trim()).length >= 2
       : input.trim().length > 0;
+
+  function addProgram() {
+    if (programs.length < 5) setPrograms((prev) => [...prev, ""]);
+  }
+
+  function removeProgram(idx: number) {
+    if (programs.length <= 2) return;
+    setPrograms((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function updateProgram(idx: number, value: string) {
+    setPrograms((prev) => prev.map((p, i) => (i === idx ? value : p)));
+  }
 
   function submit() {
     if (!canSubmit || create.isPending) return;
-    create.mutate({
-      user_input: input.trim(),
-      mode,
-      user_input_b: mode === "compare" ? inputB.trim() : undefined,
-    });
+    if (mode === "compare") {
+      const cleaned = programs.map((p) => p.trim()).filter(Boolean);
+      create.mutate({
+        user_input: cleaned[0],
+        mode,
+        programs: cleaned,
+      });
+    } else {
+      create.mutate({ user_input: input.trim(), mode });
+    }
+  }
+
+  function fillExample(ex: string) {
+    if (mode === "compare") {
+      const firstEmpty = programs.findIndex((p) => !p.trim());
+      if (firstEmpty >= 0) {
+        updateProgram(firstEmpty, ex);
+      } else {
+        updateProgram(0, ex);
+      }
+    } else {
+      setInput(ex);
+    }
   }
 
   return (
@@ -72,7 +115,7 @@ export default function HomePage() {
       </Topbar>
 
       {/* ── Hero ── */}
-      <div className="relative overflow-hidden border-b border-white/8 bg-[#0e1e30] hero-mesh">
+      <div className="relative overflow-hidden border-b border-white/8 bg-[#0d1b2a] hero-mesh">
         {/* grid overlay */}
         <div
           className="pointer-events-none absolute inset-0"
@@ -86,7 +129,7 @@ export default function HomePage() {
         <div className="relative mx-auto max-w-3xl px-5 py-12 sm:py-16 text-center">
           {/* eyebrow */}
           <div className="inline-flex items-center gap-2 mb-5 rounded-pill border border-white/10 bg-white/5 px-3.5 py-1.5 text-xs font-medium text-white/65 shadow-sm backdrop-blur-sm">
-            <span className="h-1.5 w-1.5 rounded-full bg-teal animate-pulse" />
+            <span className="h-1.5 w-1.5 rounded-full bg-[#F47920] animate-pulse" />
             Loyalty Intelligence Platform
             <span className="ml-1 text-white/30">·</span>
             <span className="text-white/45">AI-powered, source-verified</span>
@@ -115,27 +158,64 @@ export default function HomePage() {
           {/* input card */}
           <div className="mx-auto max-w-xl rounded-[14px] border border-white/10 bg-white/[0.05] p-4 text-left shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-sm">
             {mode === "compare" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-teal/80">
-                    Program A
-                  </label>
-                  <Input
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="e.g. Marriott Bonvoy"
-                  />
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Programs to compare
+                  </span>
+                  <span className="text-[10px] text-white/30">
+                    {programs.filter((p) => p.trim()).length}/{programs.length} filled · min 2
+                  </span>
                 </div>
-                <div>
-                  <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-blue/80">
-                    Program B
-                  </label>
-                  <Input
-                    value={inputB}
-                    onChange={(e) => setInputB(e.target.value)}
-                    placeholder="e.g. Hilton Honors"
-                  />
-                </div>
+
+                {programs.map((prog, idx) => {
+                  const color = PROGRAM_COLORS[idx % PROGRAM_COLORS.length];
+                  return (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",
+                          color.bg,
+                          color.text,
+                        )}
+                      >
+                        {color.label}
+                      </span>
+                      <Input
+                        value={prog}
+                        onChange={(e) => updateProgram(idx, e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
+                        }}
+                        placeholder={`e.g. ${EXAMPLES[idx % EXAMPLES.length]}`}
+                        className={cn(
+                          "flex-1 transition-all",
+                          prog.trim() && `ring-1 ${color.ring}`,
+                        )}
+                      />
+                      {programs.length > 2 && (
+                        <button
+                          onClick={() => removeProgram(idx)}
+                          className="shrink-0 rounded-full p-1 text-white/30 transition hover:bg-white/10 hover:text-white/70"
+                          title="Remove program"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {programs.length < 5 && (
+                  <button
+                    onClick={addProgram}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/15 py-2 text-[11px] font-medium text-white/40 transition hover:border-white/30 hover:text-white/60"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add program
+                    <span className="ml-1 text-white/25">({programs.length}/5)</span>
+                  </button>
+                )}
               </div>
             ) : (
               <div>
@@ -159,9 +239,7 @@ export default function HomePage() {
               {EXAMPLES.map((ex) => (
                 <button
                   key={ex}
-                  onClick={() =>
-                    mode === "compare" && input ? setInputB(ex) : setInput(ex)
-                  }
+                  onClick={() => fillExample(ex)}
                   className="rounded-pill border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/60 transition hover:border-teal/40 hover:bg-teal/10 hover:text-white"
                 >
                   {ex}

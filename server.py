@@ -40,6 +40,7 @@ from graph import (
 )
 from comparison import compare_claim_sets
 from converse import answer_question
+import cost_tracker
 
 app = FastAPI(title="Kobie API")
 
@@ -73,6 +74,7 @@ class RunRecord:
         user_input: str,
         mode: str,
         user_input_b: str | None = None,
+        programs_list: list[str] | None = None,
     ) -> None:
         self.run_id = run_id
         self.user_input = user_input
@@ -80,6 +82,7 @@ class RunRecord:
         self.mode = mode
         self.state: AgentState = build_initial_state(user_input, RunMode(mode))
         self.state["run_id"] = run_id
+        self.cost_ledger = cost_tracker.create_ledger(run_id)
         self.stage_status: dict[str, str] = {s: "idle" for s in UI_STAGES}
         self.active_stage: str | None = None
         self.run_status: str = "running"
@@ -87,6 +90,25 @@ class RunRecord:
         self.compare_b: dict[str, Any] | None = None
         self.lock = threading.Lock()
         self.clarification_event = threading.Event()
+        self.stop_event = threading.Event()
+
+        # Multi-program comparison support
+        if mode == "compare":
+            if programs_list and len(programs_list) >= 2:
+                self.programs: list[str] = programs_list
+            elif user_input_b:
+                self.programs = [user_input, user_input_b]
+            else:
+                self.programs = [user_input]
+        else:
+            self.programs = [user_input]
+
+        self.current_program_index: int = 0
+        self.program_statuses: list[str] = ["pending"] * len(self.programs)
+        self.program_states: list[dict[str, Any] | None] = [None] * len(self.programs)
+        self.program_stage_statuses: list[dict[str, str]] = [
+            {s: "idle" for s in UI_STAGES} for _ in self.programs
+        ]
 
 
 STORE: dict[str, RunRecord] = {}
@@ -107,12 +129,25 @@ def _ser(v: Any) -> Any:
 def build_run_response(record: RunRecord) -> dict[str, Any]:
     with record.lock:
         result: dict[str, Any] = {k: _ser(v) for k, v in record.state.items()}
+        # Always expose the run's original mode, not the per-program sub-state mode
+        # (_reset_record_for_program sets each sub-state to "single" internally)
+        result["mode"] = record.mode
         result["stage_status"] = dict(record.stage_status)
         result["active_stage"] = record.active_stage
         result["status"] = record.run_status
         result["conversation"] = list(record.conversation)
+        result["cost_report"] = record.cost_ledger.to_dict()
         if record.compare_b is not None:
             result["compare_b"] = record.compare_b
+        if record.mode == "compare":
+            result["comparison_run"] = {
+                "programs": list(record.programs),
+                "current_program_index": record.current_program_index,
+                "total_programs": len(record.programs),
+                "program_statuses": list(record.program_statuses),
+                "program_states": list(record.program_states),
+                "program_stage_statuses": list(record.program_stage_statuses),
+            }
     return result
 
 
@@ -145,11 +180,18 @@ def _apply(record: RunRecord, delta: dict) -> AgentState:
 
 
 # ── Core pipeline (single program) ────────────────────────────────────────────
+def _stopped(record: RunRecord) -> bool:
+    return record.stop_event.is_set()
+
+
 def _run_single_pipeline(record: RunRecord) -> bool:
     """Run one program through all pipeline stages. Returns True on success."""
+    cost_tracker.set_active_run_id(record.run_id)
     state = record.state
 
     # 1. Input Validator — loop until resolved, rejected, or clarification timeout
+    if _stopped(record):
+        return False
     _mark(record, "input_validator", "running")
     clarification_count = 0
     while True:
@@ -181,6 +223,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
             return False
 
     # 2. Query Generator
+    if _stopped(record):
+        return False
     _mark(record, "query_generator", "running")
     try:
         delta = query_generator_node(state)
@@ -195,6 +239,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         return False
 
     # 3. Retrieval
+    if _stopped(record):
+        return False
     _mark(record, "retrieval", "running")
     try:
         delta = retrieval_node(state)
@@ -209,6 +255,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         return False
 
     # 4. Firecrawl Scraper
+    if _stopped(record):
+        return False
     _mark(record, "firecrawl_scraper", "running")
     total_scrape_urls = len(state.get("retrieved_urls", []))
 
@@ -236,6 +284,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         return False
 
     # 5–7. Ingest (raw store → chunking → extraction → claims)
+    if _stopped(record):
+        return False
     _mark(record, "chunking", "running")
     try:
         delta = ingest_node(state)
@@ -271,6 +321,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         return False
 
     # 8. Adjudication
+    if _stopped(record):
+        return False
     _mark(record, "adjudication", "running")
     try:
         delta = adjudication_node(state)
@@ -281,6 +333,8 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         return False
 
     # 9. Narration → output
+    if _stopped(record):
+        return False
     _mark(record, "output", "running")
     try:
         delta = narrator_node(state)
@@ -298,44 +352,94 @@ def _run_single_pipeline(record: RunRecord) -> bool:
 
 
 # ── Pipeline thread entry points ──────────────────────────────────────────────
+def _reset_record_for_program(record: RunRecord, prog: str, index: int) -> None:
+    """Reset the shared record state to run a fresh program through the pipeline."""
+    with record.lock:
+        record.current_program_index = index
+        record.program_statuses[index] = "running"
+        fresh = build_initial_state(prog, RunMode("single"))
+        fresh["run_id"] = record.run_id
+        record.state = fresh
+        record.stage_status = {s: "idle" for s in UI_STAGES}
+        record.active_stage = None
+
+
+def _save_program_result(record: RunRecord, index: int, success: bool,
+                         all_claims: list, all_names: list) -> None:
+    """Serialize and store the completed program state."""
+    with record.lock:
+        all_claims[index] = list(record.state.get("adjudicated_claims", []))
+        all_names[index] = record.state.get("program_name") or record.programs[index]
+        record.program_stage_statuses[index] = dict(record.stage_status)
+        serialized: dict[str, Any] = {k: _ser(v) for k, v in record.state.items()}
+        serialized["stage_status"] = dict(record.stage_status)
+        serialized["active_stage"] = None
+        serialized["status"] = "done" if success else "error"
+        serialized["cost_report"] = record.cost_ledger.to_dict()
+        record.program_states[index] = serialized
+        record.program_statuses[index] = "done" if success else "error"
+
+
 def run_pipeline(record: RunRecord) -> None:
     """Thread entry point — handles single, compare, and converse modes."""
-    if record.mode == "compare" and record.user_input_b:
-        # Run program A
-        success_a = _run_single_pipeline(record)
+    if record.mode == "compare" and len(record.programs) >= 2:
+        all_claims: list[list] = [[] for _ in record.programs]
+        all_names: list[str] = list(record.programs)
+        any_success = False
 
-        # Run program B in parallel (separate record, not in STORE)
-        record_b = RunRecord(record.run_id + "_b", record.user_input_b, "compare")
-        thread_b = threading.Thread(
-            target=_run_single_pipeline, args=(record_b,), daemon=True
-        )
-        thread_b.start()
-        thread_b.join()
+        for i, prog in enumerate(record.programs):
+            if _stopped(record):
+                with record.lock:
+                    for j in range(i, len(record.programs)):
+                        if record.program_statuses[j] == "pending":
+                            record.program_statuses[j] = "error"
+                break
 
-        if success_a and record_b.run_status != "error":
-            a_state = record.state
-            b_state = record_b.state
+            _reset_record_for_program(record, prog, i)
+            cost_tracker.set_active_run_id(record.run_id)
+            success = _run_single_pipeline(record)
+            _save_program_result(record, i, success, all_claims, all_names)
+            if success:
+                any_success = True
+
+        # Generate comparison output for the first two completed programs
+        done_indices = [i for i, s in enumerate(record.program_statuses) if s == "done"]
+        if len(done_indices) >= 2:
             try:
                 comparison = compare_claim_sets(
                     record.run_id,
-                    a_state.get("program_name") or record.user_input,
-                    b_state.get("program_name") or record.user_input_b,
-                    a_state.get("adjudicated_claims", []),
-                    b_state.get("adjudicated_claims", []),
+                    all_names[done_indices[0]],
+                    all_names[done_indices[1]],
+                    all_claims[done_indices[0]],
+                    all_claims[done_indices[1]],
                 )
                 with record.lock:
                     record.state = {**record.state, "comparison_output": comparison}
             except Exception:
                 pass
-
             with record.lock:
-                record.compare_b = build_run_response(record_b)
+                record.compare_b = record.program_states[done_indices[1]]
 
         with record.lock:
-            record.run_status = "done" if success_a else "error"
+            # Mark any stage still showing "running" as failed
+            for s in list(record.stage_status.keys()):
+                if record.stage_status[s] == "running":
+                    record.stage_status[s] = "error"
+            record.active_stage = None
+            if not _stopped(record):
+                record.run_status = "done" if any_success else "error"
+            # else: run_status is already "cancelled" — preserve it
 
     else:
         success = _run_single_pipeline(record)
+
+        if _stopped(record):
+            with record.lock:
+                for s in list(record.stage_status.keys()):
+                    if record.stage_status[s] == "running":
+                        record.stage_status[s] = "error"
+                record.active_stage = None
+            return  # run_status already "cancelled"
 
         if success:
             program_name = record.state.get("program_name") or record.user_input
@@ -785,16 +889,12 @@ def _build_mock_field_report(profile_key: str) -> FieldReport:
     )
 
 
-def _run_mock_pipeline(record: RunRecord) -> None:
-    """Skip retrieval/extraction; inject mock field_report and run from claims onward."""
-    program_key = _fuzzy_match_profile(record.user_input)
-    if program_key is None:
-        # Fall back to Delta SkyMiles as default
-        program_key = "delta skymiles"
-
+def _run_mock_single(record: RunRecord, prog: str) -> None:
+    """Run the mock pipeline for one program (record already reset for this prog)."""
+    cost_tracker.set_active_run_id(record.run_id)
+    program_key = _fuzzy_match_profile(prog) or "delta skymiles"
     profile = _MOCK_PROFILES[program_key]
 
-    # Mark all pre-claims stages as done instantly
     for stage in ["input_validator", "query_generator", "retrieval", "firecrawl_scraper", "chunking", "extraction"]:
         _mark(record, stage, "done")
 
@@ -805,14 +905,13 @@ def _run_mock_pipeline(record: RunRecord) -> None:
         "program_name": profile["program_name"],
         "brand": profile["brand"],
         "field_report": field_report,
-        "conflicts": raw_conflicts,   # real adjudication/debate runs from here
+        "conflicts": raw_conflicts,
         "adjudicated": [],
     })
     _mark(record, "claims", "done")
 
     state = record.state
 
-    # Adjudication
     _mark(record, "adjudication", "running")
     try:
         delta = adjudication_node(state)
@@ -822,16 +921,52 @@ def _run_mock_pipeline(record: RunRecord) -> None:
         _apply(record, {"errors": [*state.get("errors", []), {"stage": "adjudication", "message": str(exc)}]})
         _mark(record, "adjudication", "error")
 
-    # Narration → output
     _mark(record, "output", "running")
     try:
         delta = narrator_node(state)
-        state = _apply(record, delta)
+        _apply(record, delta)
         _mark(record, "output", "done")
     except Exception as exc:
         _apply(record, {"errors": [*state.get("errors", []), {"stage": "output", "message": str(exc)}]})
         _mark(record, "output", "error")
 
+
+def _run_mock_pipeline(record: RunRecord) -> None:
+    """Skip retrieval/extraction; inject mock field_report and run from claims onward."""
+    if record.mode == "compare" and len(record.programs) >= 2:
+        all_claims: list[list] = [[] for _ in record.programs]
+        all_names: list[str] = list(record.programs)
+
+        for i, prog in enumerate(record.programs):
+            if _stopped(record):
+                break
+            _reset_record_for_program(record, prog, i)
+            _run_mock_single(record, prog)
+            _save_program_result(record, i, True, all_claims, all_names)
+
+        done_indices = [i for i, s in enumerate(record.program_statuses) if s == "done"]
+        if len(done_indices) >= 2:
+            try:
+                comparison = compare_claim_sets(
+                    record.run_id,
+                    all_names[done_indices[0]],
+                    all_names[done_indices[1]],
+                    all_claims[done_indices[0]],
+                    all_claims[done_indices[1]],
+                )
+                with record.lock:
+                    record.state = {**record.state, "comparison_output": comparison}
+            except Exception:
+                pass
+            with record.lock:
+                record.compare_b = record.program_states[done_indices[1]]
+
+        with record.lock:
+            record.run_status = "done"
+        return
+
+    # Single program mock
+    _run_mock_single(record, record.user_input)
     with record.lock:
         record.run_status = "done"
 
@@ -841,6 +976,7 @@ class CreateRunBody(_PydanticBase):
     user_input: str
     mode: str = "single"
     user_input_b: str | None = None
+    programs: list[str] | None = None
     mock: bool = False
 
 
@@ -861,7 +997,14 @@ def create_run(body: CreateRunBody) -> dict[str, str]:
     mode = body.mode if body.mode in ("single", "compare", "converse") else "single"
     run_id = new_id("run")
 
-    record = RunRecord(run_id, body.user_input.strip(), mode, body.user_input_b)
+    # Normalise programs list for compare mode
+    programs_list: list[str] | None = None
+    if mode == "compare" and body.programs:
+        clean = [p.strip() for p in body.programs if p.strip()]
+        if len(clean) >= 2:
+            programs_list = clean
+
+    record = RunRecord(run_id, body.user_input.strip(), mode, body.user_input_b, programs_list)
     with STORE_LOCK:
         STORE[run_id] = record
 
@@ -929,6 +1072,7 @@ def converse(run_id: str, body: ConverseRequest) -> dict[str, Any]:
     if final_brief is None:
         raise HTTPException(status_code=400, detail="Pipeline has not completed — no brief available yet.")
 
+    cost_tracker.set_active_run_id(run_id)
     try:
         answer = answer_question(body.message.strip(), final_brief, field_report)
     except Exception as exc:
@@ -949,3 +1093,18 @@ def converse(run_id: str, body: ConverseRequest) -> dict[str, Any]:
         )
 
     return answer.model_dump()
+
+
+@app.post("/api/run/{run_id}/stop")
+def stop_run(run_id: str) -> dict[str, Any]:
+    with STORE_LOCK:
+        record = STORE.get(run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    with record.lock:
+        if record.run_status not in ("running", "clarification_needed"):
+            raise HTTPException(status_code=400, detail="run is not in progress")
+        record.run_status = "cancelled"
+    record.stop_event.set()
+    record.clarification_event.set()  # unblock any waiting clarification
+    return {"ok": True}

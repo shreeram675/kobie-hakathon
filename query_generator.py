@@ -12,8 +12,19 @@ from typing import Any, Protocol
 
 import requests
 
+import cost_tracker
 from providers import provider_for_stage
 from schemas import ProgramIdentity, QueryGenerationOutput, SearchQuery
+
+
+def _record_gemini_usage(stage: str, usage: dict) -> None:
+    ledger = cost_tracker.get_current_ledger()
+    if ledger is None:
+        return
+    prompt = int(usage.get("promptTokenCount") or 0)
+    completion = int(usage.get("candidatesTokenCount") or 0)
+    if prompt or completion:
+        ledger.record_gemini(stage, prompt, completion)
 
 
 QUERY_GENERATOR_SYSTEM_PROMPT = """
@@ -299,6 +310,8 @@ class GeminiQueryGeneratorClient:
     def complete_json(self, prompt: str) -> dict[str, Any]:
         response = self._post_with_retries(prompt)
         payload = response.json()
+        usage = payload.get("usageMetadata", {})
+        _record_gemini_usage("query_generator", usage)
         content = payload["candidates"][0]["content"]["parts"][0]["text"]
         return parse_json_content(content)
 
@@ -346,6 +359,52 @@ class GeminiQueryGeneratorClient:
         raise RuntimeError("Gemini query generator request failed.")
 
 
+class GroqQueryGeneratorClient:
+    """Groq-backed query generator — used as a fallback when Gemini is exhausted.
+
+    Reads keys from QUERY_GENERATOR_GROQ_API_KEYS (comma-separated).
+    Returns the same JSON structure as GeminiQueryGeneratorClient so it
+    satisfies the QueryGeneratorClient protocol transparently.
+    """
+
+    def __init__(self) -> None:
+        raw = os.getenv("QUERY_GENERATOR_GROQ_API_KEYS", "").strip()
+        self._keys = [k.strip() for k in raw.split(",") if k.strip()]
+        self._index = 0
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._keys)
+
+    def complete_json(self, prompt: str) -> dict[str, Any]:
+        if not self._keys:
+            raise RuntimeError("QUERY_GENERATOR_GROQ_API_KEYS not set.")
+        from groq import Groq
+        import re as _re
+
+        model = os.getenv("QUERY_GENERATOR_GROQ_MODEL", "llama-3.3-70b-versatile")
+        last_exc: Exception | None = None
+        for _ in range(len(self._keys) * 2):
+            key = self._keys[self._index % len(self._keys)]
+            self._index += 1
+            try:
+                client = Groq(api_key=key)
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=2048,
+                )
+                content = (response.choices[0].message.content or "").strip()
+                return parse_json_content(content)
+            except Exception as exc:
+                msg = str(exc)
+                if "rate_limit_exceeded" not in msg and "429" not in msg:
+                    raise
+                last_exc = exc
+        raise last_exc or RuntimeError("GroqQueryGeneratorClient: exhausted all keys.")
+
+
 def generate_queries(
     identity: ProgramIdentity,
     client: QueryGeneratorClient | None = None,
@@ -355,8 +414,17 @@ def generate_queries(
         payload = generator.complete_json(build_query_generator_prompt(identity))
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else None
-        if _local_fallback_enabled() and status_code in TRANSIENT_GEMINI_STATUS_CODES:
-            return build_local_query_generation_output(identity, reason=f"Gemini returned {status_code}")
+        if status_code in TRANSIENT_GEMINI_STATUS_CODES:
+            groq_client = GroqQueryGeneratorClient()
+            if groq_client.configured:
+                try:
+                    payload = groq_client.complete_json(build_query_generator_prompt(identity))
+                    output = parse_query_generation_output(payload, identity=identity)
+                    return output.model_copy(update={"queries": _anchor_year_to_volatile_queries(output.queries)})
+                except Exception:
+                    pass
+            if _local_fallback_enabled():
+                return build_local_query_generation_output(identity, reason=f"Gemini returned {status_code}")
         raise
     output = parse_query_generation_output(payload, identity=identity)
     return output.model_copy(update={"queries": _anchor_year_to_volatile_queries(output.queries)})

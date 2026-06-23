@@ -6,8 +6,10 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { createRun, fetchRun, fetchRuns, postConverse, postClarify } from "./api";
+import { createRun, fetchRun, fetchRuns, postConverse, postClarify, stopRun } from "./api";
 import type { CreateRunBody } from "./types";
+
+const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
 
 /** Poll the run state every 2s while the run is still in progress. */
 export function useRun(runId: string) {
@@ -16,7 +18,7 @@ export function useRun(runId: string) {
     queryFn: () => fetchRun(runId),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status === "done" || status === "error" ? false : 2000;
+      return status && TERMINAL_STATUSES.has(status) ? false : 2000;
     },
     refetchIntervalInBackground: true,
   });
@@ -41,6 +43,29 @@ export function useRuns() {
 }
 
 export function useCreateRun() {
+  const router = useRouter();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateRunBody) => createRun(body),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["runs"] });
+      router.push(`/run/${data.run_id}`);
+    },
+  });
+}
+
+export function useStopRun(runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => stopRun(runId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["run", runId] });
+      qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+export function useRetryRun() {
   const router = useRouter();
   const qc = useQueryClient();
   return useMutation({

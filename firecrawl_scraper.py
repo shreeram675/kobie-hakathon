@@ -9,6 +9,7 @@ from typing import Any, Callable, Protocol
 
 import requests
 
+import cost_tracker
 from providers import provider_for_stage
 from schemas import FirecrawlScrapeOutput, RetrievedUrl, ScrapedUrlBlock
 
@@ -102,6 +103,9 @@ class FirecrawlRestClient:
 def _scrape_one(retrieved: RetrievedUrl, client: FirecrawlClient) -> ScrapedUrlBlock:
     try:
         payload = client.scrape(retrieved.url)
+        ledger = cost_tracker.get_current_ledger()
+        if ledger:
+            ledger.record_firecrawl(1)
         return parse_firecrawl_payload(retrieved, payload)
     except ForbiddenError as exc:
         return ScrapedUrlBlock(

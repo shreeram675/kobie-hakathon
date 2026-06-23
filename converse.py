@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import cost_tracker
 from providers import provider_for_stage
 from schemas import BriefOutput, ClaimStatus, ConverseAnswer, FieldReport
 
@@ -142,6 +143,10 @@ def _call_groq(prompt: str) -> str:
                 temperature=0.2,
                 max_tokens=700,
             )
+            if response.usage:
+                ledger = cost_tracker.get_current_ledger()
+                if ledger:
+                    ledger.record_groq("converse", response.usage.prompt_tokens or 0, response.usage.completion_tokens or 0)
             return (response.choices[0].message.content or "").strip()
         except Exception as exc:
             msg = str(exc)

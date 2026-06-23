@@ -192,6 +192,7 @@ export function StageDetailPanel({
           const totalUrls = fc?.total_urls ?? (state.retrieved_urls ?? []).length;
           const successful = fc?.successful_scrapes ?? blocks.filter((b) => b.scrape_status === "success" && b.content).length;
           const failed = fc?.failed_scrapes ?? blocks.filter((b) => b.scrape_status !== "success").length;
+          const fallbacks = fc?.fallback_scrapes ?? blocks.filter((b) => b.is_fallback).length;
           const pending = totalUrls - blocks.length;
 
           if (blocks.length === 0 && scrapeStatus !== "running") return null;
@@ -210,6 +211,11 @@ export function StageDetailPanel({
 
           return (
             <div className="space-y-4">
+              {fallbacks > 0 && (
+                <AlertBanner level="amber" title={`${fallbacks} fallback URL${fallbacks === 1 ? "" : "s"} used`}>
+                  {fallbacks} original URL{fallbacks === 1 ? "" : "s"} failed to scrape and {fallbacks === 1 ? "was" : "were"} replaced with the next-best results from the retrieval pool.
+                </AlertBanner>
+              )}
               <div className="grid gap-4 lg:grid-cols-[auto_1fr] lg:items-center">
                 <Donut
                   centerValue={totalUrls}
@@ -222,11 +228,14 @@ export function StageDetailPanel({
                     return (
                       <div
                         key={i}
-                        className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${isFailed ? "border-red/30 bg-red/5" : "border-line"}`}
+                        className={`flex items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs ${isFailed ? "border-red/30 bg-red/5" : b.is_fallback ? "border-amber/30 bg-amber/5" : "border-line"}`}
                       >
                         <Badge tone={b.scrape_status === "success" ? "green" : "red"} dot>
                           {b.scrape_status}
                         </Badge>
+                        {b.is_fallback && (
+                          <Badge tone="amber">fallback</Badge>
+                        )}
                         <span className="min-w-0 flex-1 truncate text-ink/70">
                           {truncate(b.title ?? b.url, 42)}
                         </span>
