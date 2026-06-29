@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from graph import run_validation_chat
+from pipeline.graph import run_validation_chat
 
 
 def main() -> None:

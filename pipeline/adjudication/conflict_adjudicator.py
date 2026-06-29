@@ -14,8 +14,8 @@ from datetime import date, datetime
 import json
 from typing import Any
 
-from schemas import AgentState, FieldReport, NormalizedObjectPacket, RawDocument, new_id, now_iso
-from adjudication.debate_engine import run_debate
+from core.schemas import AgentState, FieldReport, NormalizedObjectPacket, RawDocument, new_id, now_iso
+from pipeline.adjudication.debate_engine import run_debate
 
 
 AUTO_RESOLVE_SCORE_GAP = 0.20
@@ -216,7 +216,7 @@ def _build_human_review_item(
 
 async def _run_debates(conflicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # Reset pool so clients rebind to the event loop created by asyncio.run().
-    import adjudication.debate_engine as _de
+    import pipeline.adjudication.debate_engine as _de
     _de._GROQ_SEMAPHORE = asyncio.Semaphore(5)
     _de._CLIENT_POOL = None
     _de._POOL_COUNTER = 0
@@ -412,6 +412,21 @@ def apply_adjudication_to_field_report(
             )
             continue
         resolution = resolutions[0]
+        winner = resolution.get("winner")
+        rej_value = resolution.get("value_b") if winner == "A" else resolution.get("value_a")
+        rej_url = resolution.get("url_b") if winner == "A" else resolution.get("url_a")
+        rej_reason = resolution.get("reasoning") or resolution.get("deciding_factor") or "adjudicated"
+        new_rejected = {
+            "value": rej_value,
+            "source_urls": [rej_url] if rej_url else [],
+            "reason": rej_reason,
+        }
+        # Prepend the adjudication-derived rejection (most authoritative) ahead of any
+        # pre-existing lower-confidence alternatives captured during extraction.
+        merged_rejected = [new_rejected] + [
+            r for r in (entry.rejected_alternatives or [])
+            if str(r.get("value", "")) != str(rej_value or "")
+        ]
         # Promote status to "extracted" — debate produced a clear winner, regardless of
         # what the entry's pre-adjudication status was (extracted or ambiguous).
         entries.append(
@@ -421,6 +436,7 @@ def apply_adjudication_to_field_report(
                     "value": resolution["value"],
                     "source_urls": [resolution["source_url"]] if resolution.get("source_url") else entry.source_urls,
                     "confidence": resolution["confidence"],
+                    "rejected_alternatives": merged_rejected,
                 }
             )
         )

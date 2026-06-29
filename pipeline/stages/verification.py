@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from schemas import Claim, ClaimStatus, ConflictRecord, Volatility
+from core.schemas import Claim, ClaimStatus, ConflictRecord, Volatility
 
 
 def confidence_score(recency: float, authority: float, corroboration: float, volatility: Volatility) -> float:

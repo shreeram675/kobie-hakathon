@@ -12,9 +12,9 @@ from typing import Any, Protocol
 
 import requests
 
-import cost_tracker
-from providers import provider_for_stage
-from schemas import ProgramIdentity, QueryGenerationOutput, SearchQuery
+from core import cost_tracker
+from core.providers import provider_for_stage
+from core.schemas import ProgramIdentity, QueryGenerationOutput, SearchQuery
 
 
 def _record_gemini_usage(stage: str, usage: dict) -> None:
@@ -255,10 +255,10 @@ Return ONLY valid JSON. No explanation. No markdown fences.
 Use the exact schema field names shown in the TARGET SCHEMA for target_fields and field_query_map keys.
 
 estimated_web_coverage: fraction of the 30 schema fields that have at least one public web source.
-  · Major global programs (household name, >50 M members): 0.75–0.95
-  · Mid-tier / regional:                                    0.55–0.75
-  · Niche / new / private-label:                            0.35–0.55
-  Never output 0.0 — even the smallest program has at least its earn rules and T&C publicly available.
+  · Major global programs (household name, >50 M members): 0.90–0.98
+  · Mid-tier / regional:                                    0.78–0.90
+  · Niche / new / private-label:                            0.65–0.78
+  Never output below 0.65 — even niche programs publish their earn rules, T&C, and partner lists publicly.
 
 {
   "detected_category": "",

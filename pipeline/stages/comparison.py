@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from schemas import Claim, ClaimStatus, ComparisonItem, ComparisonOutput
+from core.schemas import Claim, ClaimStatus, ComparisonItem, ComparisonOutput
 
 
 def compare_claim_sets(run_id: str, program_a: str, program_b: str, a_claims: list[Claim], b_claims: list[Claim]) -> ComparisonOutput:

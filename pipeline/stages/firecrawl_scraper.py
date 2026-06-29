@@ -9,9 +9,9 @@ from typing import Any, Callable, Protocol
 
 import requests
 
-import cost_tracker
-from providers import provider_for_stage
-from schemas import FirecrawlScrapeOutput, RetrievedUrl, ScrapedUrlBlock
+from core import cost_tracker
+from core.providers import provider_for_stage
+from core.schemas import FirecrawlScrapeOutput, RetrievedUrl, ScrapedUrlBlock
 
 
 class ForbiddenError(RuntimeError):
@@ -100,12 +100,12 @@ class FirecrawlRestClient:
         return response.json()
 
 
-def _scrape_one(retrieved: RetrievedUrl, client: FirecrawlClient) -> ScrapedUrlBlock:
+def _scrape_one(retrieved: RetrievedUrl, client: FirecrawlClient, *, ledger=None) -> ScrapedUrlBlock:
     try:
         payload = client.scrape(retrieved.url)
-        ledger = cost_tracker.get_current_ledger()
-        if ledger:
-            ledger.record_firecrawl(1)
+        active_ledger = ledger or cost_tracker.get_current_ledger()
+        if active_ledger:
+            active_ledger.record_firecrawl(1)
         return parse_firecrawl_payload(retrieved, payload)
     except ForbiddenError as exc:
         return ScrapedUrlBlock(
@@ -164,6 +164,9 @@ def _scrape_with_pool(
     keys = pool.all_keys()
     n_keys = len(keys)
 
+    # Capture ledger on the calling thread — worker threads have no thread-local run_id
+    ledger = cost_tracker.get_current_ledger()
+
     # Round-robin assign: URL i → key i % n_keys, preserving original order via index
     buckets: list[list[tuple[int, RetrievedUrl]]] = [[] for _ in keys]
     for i, url in enumerate(urls):
@@ -175,7 +178,7 @@ def _scrape_with_pool(
     def scrape_bucket(key: str, bucket: list[tuple[int, RetrievedUrl]]) -> None:
         fc = FirecrawlRestClient(api_key=key, api_base=api_base)
         for idx, retrieved in bucket:
-            block = _scrape_one(retrieved, fc)
+            block = _scrape_one(retrieved, fc, ledger=ledger)
             with progress_lock:
                 results[idx] = block
                 if on_progress:

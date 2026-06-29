@@ -6,7 +6,7 @@ evaluation-safe absent fields.
 
 from __future__ import annotations
 
-from schemas import Claim, ClaimStatus, SCHEMA_FIELD_PATHS, volatility_for_field
+from core.schemas import Claim, ClaimStatus, SCHEMA_FIELD_PATHS, volatility_for_field
 
 
 def manual_review_claims_for_unsearched_fields(run_id: str, searched_field_paths: set[str]) -> list[Claim]:

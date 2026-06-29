@@ -8,15 +8,15 @@ from typing import Literal, cast
 
 from langgraph.graph import END, START, StateGraph
 
-from firecrawl_scraper import scrape_retrieved_urls
+from pipeline.stages.firecrawl_scraper import scrape_retrieved_urls
 from pipeline.nodes.ingest_node import ingest_node as post_firecrawl_ingest_node
 from pipeline.stages.app_ratings_fetcher import build_app_ratings_packet, fetch_app_ratings
 from pipeline.stages.direct_url_seeder import seed_urls
 from pipeline.stages.wikipedia_fetcher import build_wikipedia_block, fetch_wikipedia_summary
-from query_generator import generate_queries
-from retrieval import retrieve_urls
-from schemas import AgentState, FirecrawlScrapeOutput, NormalizedObjectPacket, ScrapedUrlBlock, PipelineError, build_initial_state, new_id, now_iso
-from validation import validate_conversation
+from pipeline.stages.query_generator import generate_queries
+from pipeline.stages.retrieval import retrieve_urls
+from core.schemas import AgentState, FirecrawlScrapeOutput, NormalizedObjectPacket, ScrapedUrlBlock, PipelineError, build_initial_state, new_id, now_iso
+from pipeline.stages.validation import validate_conversation
 
 
 def input_validator_node(state: AgentState) -> dict:
@@ -263,7 +263,7 @@ def ingest_node(state: AgentState) -> dict:
 def narrator_node(state: AgentState) -> dict:
     """Generate a 600-900 word program brief from the adjudicated field report."""
     try:
-        from narration import narrator_node as _narrator
+        from pipeline.stages.narration import narrator_node as _narrator
         return _narrator(state)
     except Exception as exc:
         return {
@@ -335,7 +335,7 @@ def adjudication_node(state: AgentState) -> dict:
     """Detect conflicting extracted claims and resolve them via debate."""
 
     try:
-        from adjudication.conflict_adjudicator import adjudicator_node
+        from pipeline.adjudication.conflict_adjudicator import adjudicator_node
 
         updated = adjudicator_node(state)
         raw_adj = updated.get("adjudicated", [])
@@ -349,7 +349,7 @@ def adjudication_node(state: AgentState) -> dict:
             "updated_at": now_iso(),
         }
     except Exception as exc:
-        from adjudication.conflict_adjudicator import _claims_from_field_report
+        from pipeline.adjudication.conflict_adjudicator import _claims_from_field_report
         extracted_claims = _claims_from_field_report(state.get("field_report"), state.get("run_id", ""))
         return {
             "errors": [

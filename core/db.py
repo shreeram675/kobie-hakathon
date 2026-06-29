@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from schemas import Claim, NormalizedObjectPacket, ProgramIdentity, RawDocument, now_iso
+from core.schemas import Claim, NormalizedObjectPacket, ProgramIdentity, RawDocument, now_iso
 
 
 DEFAULT_DB_PATH = Path("kobie.sqlite3")
@@ -35,6 +35,7 @@ DDL = (
         domain TEXT,
         status TEXT NOT NULL,
         data_quality REAL NOT NULL DEFAULT 0,
+        run_state_json TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
@@ -178,20 +179,32 @@ def migrate(conn: sqlite3.Connection) -> None:
     with _WRITE_LOCK:
         for statement in DDL:
             conn.execute(statement)
+        existing_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "run_state_json" not in existing_cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN run_state_json TEXT")
         conn.commit()
 
 
-def upsert_run(conn: sqlite3.Connection, state: dict[str, Any], status: str = "initialized") -> None:
+def upsert_run(
+    conn: sqlite3.Connection,
+    state: dict[str, Any],
+    status: str = "initialized",
+    run_state_json: str | None = None,
+) -> None:
     with _WRITE_LOCK:
         conn.execute(
             """
-            INSERT INTO runs (run_id, mode, user_input, program_name, domain, status, data_quality, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO runs (run_id, mode, user_input, program_name, domain, status, data_quality, run_state_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO UPDATE SET
                 program_name=excluded.program_name,
                 domain=excluded.domain,
                 status=excluded.status,
                 data_quality=excluded.data_quality,
+                run_state_json=excluded.run_state_json,
                 updated_at=excluded.updated_at
             """,
             (
@@ -202,11 +215,31 @@ def upsert_run(conn: sqlite3.Connection, state: dict[str, Any], status: str = "i
                 str(state.get("domain")) if state.get("domain") else None,
                 status,
                 state.get("data_quality", 0.0),
+                run_state_json,
                 state["created_at"],
                 now_iso(),
             ),
         )
         conn.commit()
+
+
+def list_runs(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
+    """Return persisted run summaries ordered by most recent first."""
+    rows = conn.execute(
+        f"SELECT run_id, mode, user_input, program_name, status, data_quality, run_state_json, created_at, updated_at "
+        f"FROM runs ORDER BY created_at DESC LIMIT {int(limit)}"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
+    """Return a persisted run row by id, including any serialized state payload."""
+    row = conn.execute(
+        "SELECT run_id, mode, user_input, program_name, status, data_quality, run_state_json, created_at, updated_at "
+        "FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def upsert_identity(conn: sqlite3.Connection, identity: ProgramIdentity) -> None:
@@ -359,6 +392,41 @@ def list_program_snapshots(conn: sqlite3.Connection, limit: int = 100) -> list[d
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def find_program_snapshot_by_run_id(conn: sqlite3.Connection, run_id: str) -> dict | None:
+    """Return a stored program snapshot containing the requested run id."""
+    rows = conn.execute(
+        "SELECT * FROM run_snapshots WHERE program_state_json LIKE ? ORDER BY created_at DESC",
+        (f'%"run_id": "{run_id}"%',),
+    ).fetchall()
+    for row in rows:
+        data = dict(row)
+        try:
+            state = json.loads(data["program_state_json"])
+        except Exception:
+            continue
+        if state.get("run_id") == run_id:
+            return data
+    return None
+
+
+def list_program_snapshots_by_run_id(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+    """Return all stored snapshots whose serialized state references the given run id."""
+    rows = conn.execute(
+        "SELECT * FROM run_snapshots WHERE program_state_json LIKE ? ORDER BY created_at ASC",
+        (f'%"run_id": "{run_id}"%',),
+    ).fetchall()
+    result: list[dict] = []
+    for row in rows:
+        data = dict(row)
+        try:
+            state = json.loads(data["program_state_json"])
+        except Exception:
+            continue
+        if state.get("run_id") == run_id:
+            result.append(data)
+    return result
 
 
 def upsert_normalized_packets(conn: sqlite3.Connection, packets: list[NormalizedObjectPacket]) -> None:
