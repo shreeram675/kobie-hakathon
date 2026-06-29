@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 
-from adjudication.debate_engine import run_debate
+from pipeline.adjudication.debate_engine import run_debate
 
 
 CONFLICT = {

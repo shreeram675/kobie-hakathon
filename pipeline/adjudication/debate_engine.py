@@ -17,11 +17,11 @@ import re
 from collections import Counter
 from typing import Any
 
-import cost_tracker
-from providers import provider_for_stage
+from core import cost_tracker
+from core.providers import provider_for_stage
 
 # File logger so we can diagnose key issues without needing the terminal
-_file_handler = logging.FileHandler("debate_debug.log", encoding="utf-8")
+_file_handler = logging.FileHandler("logs/debate_debug.log", encoding="utf-8")
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 logging.getLogger("kobie.debate").addHandler(_file_handler)

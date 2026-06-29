@@ -291,6 +291,9 @@ class FieldReportEntry(KobieModel):
     source_snippet: str | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
     corroboration_count: int = Field(default=0, ge=0)
+    # Alternative values that were present in the data but overruled (lower confidence/corroboration
+    # or lost in adjudication debate). Each entry: {value, source_urls, reason}.
+    rejected_alternatives: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class FieldReport(KobieModel):
@@ -402,17 +405,33 @@ class CategoryVerdict(KobieModel):
     label: str
     winner: str  # program name or "Tie" or "Insufficient data"
     insight: str
+    source_urls: list[str] = Field(default_factory=list)
 
 
 class KeyDifferentiator(KobieModel):
     topic: str
     insight: str
     advantage: str  # program name that wins here
+    source_urls: list[str] = Field(default_factory=list)
+    # Describes the value that was rejected/overruled for this differentiator, if applicable.
+    rejected_note: str | None = None
 
 
 class ProgramPersona(KobieModel):
     program: str
     best_for: str
+
+
+class ProgramStrategicProfile(KobieModel):
+    program: str
+    advantages: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+
+
+class DifferentiationTheme(KobieModel):
+    theme: str
+    summary: str
+    leader: str | None = None
 
 
 class ComparisonBrief(KobieModel):
@@ -424,6 +443,8 @@ class ComparisonBrief(KobieModel):
     category_verdicts: list[CategoryVerdict] = Field(default_factory=list)
     key_differentiators: list[KeyDifferentiator] = Field(default_factory=list)
     personas: list[ProgramPersona] = Field(default_factory=list)
+    strategic_profiles: list[ProgramStrategicProfile] = Field(default_factory=list)
+    differentiation_themes: list[DifferentiationTheme] = Field(default_factory=list)
     generated_at: str = Field(default_factory=now_iso)
 
 
