@@ -30,6 +30,7 @@ import { SingleProgramBriefPanel } from "@/components/SingleProgramBriefPanel";
 import { ClarificationPanel } from "@/components/ClarificationPanel";
 import { ProgramQueuePanel } from "@/components/ProgramQueuePanel";
 import { useRun, useStopRun, useRetryRun } from "@/lib/hooks";
+import { DownloadPDFButton } from "@/components/DownloadPDFButton";
 import { STAGE_IDS, PIPELINE_STAGES, type StageId } from "@/lib/schema";
 import { cn, elapsed } from "@/lib/format";
 import type { AgentState, CostReport, RunMode } from "@/lib/types";
@@ -157,6 +158,9 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
               <GitCompareArrows className="h-4 w-4" /> View comparison
             </Button>
           </Link>
+        )}
+        {!isComparison && state.status === "done" && (
+          <DownloadPDFButton state={state} variant="single" />
         )}
         {(state.status === "running" || state.status === "clarification_needed") && (
           <Button
@@ -383,7 +387,6 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
             {!isComparison && state.status === "done" && state.final_brief && (
               <SingleProgramBriefPanel
                 programName={state.program_name}
-                brief={state.final_brief}
                 fieldReport={state.field_report}
               />
             )}

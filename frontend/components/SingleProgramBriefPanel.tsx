@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   ShieldAlert,
   ShieldCheck,
-  Zap,
 } from "lucide-react";
 import { cn, renderValue } from "@/lib/format";
 import {
@@ -14,15 +13,15 @@ import {
   fieldLabel,
   type Category,
 } from "@/lib/schema";
-import type { BriefOutput, FieldReport, FieldReportEntry } from "@/lib/types";
+import type { FieldReport, FieldReportEntry } from "@/lib/types";
+import { SourcePillRow } from "@/components/SourcePill";
 
 interface Props {
   programName: string | null;
-  brief: BriefOutput;
   fieldReport?: FieldReport | null;
 }
 
-export function SingleProgramBriefPanel({ programName, brief, fieldReport }: Props) {
+export function SingleProgramBriefPanel({ programName, fieldReport }: Props) {
   const entries: FieldReportEntry[] = fieldReport?.entries ?? [];
 
   // Per-category coverage stats (focused schema fields only)
@@ -66,23 +65,6 @@ export function SingleProgramBriefPanel({ programName, brief, fieldReport }: Pro
 
   return (
     <div className="space-y-4">
-      {/* ── Executive brief ─────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden rounded-card border border-teal/30 bg-gradient-to-br from-[#e2f3f3] to-white p-5 shadow-panel">
-        <span className="absolute inset-y-0 left-0 w-1 bg-teal" aria-hidden />
-        <div className="flex items-start gap-3">
-          <Zap className="mt-0.5 h-5 w-5 shrink-0 text-teal" />
-          <div className="min-w-0">
-            <p className="mb-2 text-sm font-semibold text-navy">
-              Program Intelligence Brief
-              {programName && (
-                <span className="ml-2 font-normal text-ink/45">— {programName}</span>
-              )}
-            </p>
-            <p className="text-sm leading-relaxed text-ink/75">{brief.brief_text}</p>
-          </div>
-        </div>
-      </div>
-
       {/* ── Category coverage grid ───────────────────────────────────────────── */}
       {categoryStats.length > 0 && (
         <div>
@@ -189,7 +171,7 @@ export function SingleProgramBriefPanel({ programName, brief, fieldReport }: Pro
                   <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-[10px]">
                     Conf
                   </th>
-                  <th className="px-3 py-2.5 text-right font-semibold uppercase tracking-wide text-[10px]">
+                  <th className="px-3 py-2.5 text-left font-semibold uppercase tracking-wide text-[10px]">
                     Sources
                   </th>
                 </tr>
@@ -230,8 +212,15 @@ export function SingleProgramBriefPanel({ programName, brief, fieldReport }: Pro
                         {Math.round((e.confidence ?? 0) * 100)}%
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 text-right text-ink/40 tabular-nums">
-                      {e.corroboration_count > 1 ? `${e.corroboration_count}×` : "1×"}
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-col gap-1">
+                        <SourcePillRow urls={e.source_urls ?? []} />
+                        {e.corroboration_count > 1 && (
+                          <span className="text-[9px] text-ink/35 tabular-nums">
+                            {e.corroboration_count}× corroborated
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

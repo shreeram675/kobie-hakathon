@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { useEffect, useMemo } from "react";
 import {
@@ -7,7 +8,6 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
-  ChevronRight,
   Crown,
   History,
   Loader2,
@@ -15,7 +15,6 @@ import {
   MoveRight,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   Star,
   TrendingDown,
   TrendingUp,
@@ -24,8 +23,10 @@ import {
 import { Topbar } from "@/components/Topbar";
 import { Button } from "@/components/ui/button";
 import { ComparisonTable } from "@/components/ComparisonTable";
+import { SourcePillRow } from "@/components/SourcePill";
 import { DataQualityGauge } from "@/components/charts/DataQualityGauge";
 import { useRun, useGenerateBrief } from "@/lib/hooks";
+import { DownloadPDFButton } from "@/components/DownloadPDFButton";
 import { ConverseThread } from "@/components/ConverseThread";
 import { cn, signed, renderValue } from "@/lib/format";
 import {
@@ -41,7 +42,6 @@ import type {
   AgentState,
   ComparisonBrief,
   ComparisonRunInfo,
-  DifferentiationTheme,
   FieldReportEntry,
   FieldReportStatus,
   ProgramStrategicProfile,
@@ -173,7 +173,11 @@ function TwoProgramView({ runId, state }: { runId: string; state: AgentState }) 
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6 px-5 py-7">
-      <CompareHeader programs={[programA, programB]} runId={runId} />
+      <CompareHeader
+        programs={[programA, programB]}
+        runId={runId}
+        actions={<DownloadPDFButton state={state} variant="compare" />}
+      />
 
       {/* quality cards */}
       <div className="grid gap-4 lg:grid-cols-[1fr_auto_1fr]">
@@ -361,15 +365,11 @@ function ComparisonBriefPanel({ brief }: { brief: ComparisonBrief }) {
         <StrategicProfilesSection profiles={brief.strategic_profiles} winnerColor={winnerColor} />
       )}
 
-      {/* Differentiation themes */}
-      {brief.differentiation_themes && brief.differentiation_themes.length > 0 && (
-        <DifferentiationSection themes={brief.differentiation_themes} winnerColor={winnerColor} />
-      )}
 
-      {/* Who should pick which */}
+      {/* Target Audience */}
       {brief.personas.length > 0 && (
         <div>
-          <h2 className="mb-3 text-base font-semibold text-navy">Who should choose</h2>
+          <h2 className="mb-3 text-base font-semibold text-navy">Target Audience</h2>
           <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(brief.personas.length, 3)}, minmax(0, 1fr))` }}>
             {brief.personas.map((p, i) => {
               const c = PROGRAM_COLORS[i % PROGRAM_COLORS.length];
@@ -468,47 +468,6 @@ function StrategicProfilesSection({
 
 // ── Differentiation section ───────────────────────────────────────────────────
 
-function DifferentiationSection({
-  themes,
-  winnerColor,
-}: {
-  themes: DifferentiationTheme[];
-  winnerColor: (name: string) => string;
-}) {
-  return (
-    <div>
-      <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-navy">
-        <Sparkles className="h-4 w-4 text-teal" />
-        Differentiation
-      </h2>
-      <div className="divide-y divide-line overflow-hidden rounded-card border border-line bg-white shadow-sm">
-        {themes.map((theme, i) => (
-          <div key={i} className="flex items-start gap-4 px-4 py-3.5 hover:bg-soft-grey/20 transition-colors">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-navy/8 mt-0.5">
-              <ChevronRight className="h-3.5 w-3.5 text-navy/50" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-2 mb-1">
-                <p className="text-[13px] font-semibold text-navy">{theme.theme}</p>
-                {theme.leader && (
-                  <span className={cn("inline-flex items-center gap-1 text-[10px] font-semibold rounded-pill px-2 py-0.5 bg-teal/10", winnerColor(theme.leader))}>
-                    <Crown className="h-2.5 w-2.5" /> {theme.leader}
-                  </span>
-                )}
-                {!theme.leader && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium rounded-pill px-2 py-0.5 bg-soft-grey text-ink/50">
-                    <Minus className="h-2.5 w-2.5" /> Tied
-                  </span>
-                )}
-              </div>
-              <p className="text-[12px] text-ink/65 leading-relaxed">{theme.summary}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ── Multi-program view (N ≥ 3) ────────────────────────────────────────────────
 
@@ -564,7 +523,11 @@ function MultiProgramView({
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6 px-5 py-7">
-      <CompareHeader programs={programs} runId={runId} />
+      <CompareHeader
+        programs={programs}
+        runId={runId}
+        actions={<DownloadPDFButton state={state} variant="compare" />}
+      />
 
       {/* Quality gauges row */}
       <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${Math.min(nCompleted, 4)}, minmax(0, 1fr))` }}>
@@ -740,7 +703,7 @@ function MultiFieldTable({
                       <div
                         key={progIdx}
                         className={cn(
-                          "rounded-md px-2 py-1 text-[11px] leading-relaxed",
+                          "rounded-md px-2 py-1.5 text-[11px] leading-relaxed",
                           cellStyle.bg,
                           cellStyle.text,
                           isBest && "ring-1 " + colConfig.ring,
@@ -754,6 +717,11 @@ function MultiFieldTable({
                             {Math.round((entry.confidence ?? 0) * 100)}% conf
                             {entry.corroboration_count > 1 && ` · ${entry.corroboration_count}×`}
                           </span>
+                        )}
+                        {entry.source_urls?.length > 0 && (
+                          <div className="mt-1.5">
+                            <SourcePillRow urls={entry.source_urls} />
+                          </div>
                         )}
                       </div>
                     );
@@ -819,7 +787,15 @@ function CoverageChip({
 
 // ── Shared layout helpers ─────────────────────────────────────────────────────
 
-function CompareHeader({ programs, runId }: { programs: string[]; runId: string }) {
+function CompareHeader({
+  programs,
+  runId,
+  actions,
+}: {
+  programs: string[];
+  runId: string;
+  actions?: React.ReactNode;
+}) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
@@ -833,11 +809,14 @@ function CompareHeader({ programs, runId }: { programs: string[]; runId: string 
           ))}
         </h1>
       </div>
-      <Link href={`/run/${runId}`}>
-        <Button variant="outline" size="sm">
-          <ArrowLeft className="h-4 w-4" /> Back to run
-        </Button>
-      </Link>
+      <div className="flex items-center gap-2">
+        {actions}
+        <Link href={`/run/${runId}`}>
+          <Button variant="outline" size="sm">
+            <ArrowLeft className="h-4 w-4" /> Back to run
+          </Button>
+        </Link>
+      </div>
     </div>
   );
 }
