@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import re
 import time
 from typing import Any, Protocol
 
@@ -20,6 +21,51 @@ RESULTS_PER_QUERY = 3
 # returning stale SEO articles that predate program changes.
 _STATIC_SOURCE_TYPES = frozenset({"official", "terms", "faq"})
 _RECENCY_DAYS = 365
+
+def domain_penalize_urls(
+    urls: list["RetrievedUrl"],
+    program_domain: str,
+    program_name: str = "",
+    brand: str = "",
+) -> list["RetrievedUrl"]:
+    """Penalise retrieved URLs whose title gives no signal about the target program.
+
+    Strategy: program-identity anchoring, not domain-category blocking.
+    A URL whose title mentions the program name or brand is kept at full score.
+    A URL whose title contains no reference to the program or brand gets a mild
+    penalty (score × 0.6) in opinion/competitor source types — enough to push it
+    below programme-specific sources without eliminating it, since the title is an
+    imperfect proxy for page content.
+
+    Domain is kept as a parameter for future use but is not the primary filter,
+    because programmes in the same domain (e.g. two airline programmes) can
+    contaminate each other just as easily as cross-domain sources can.
+    """
+    if not urls:
+        return urls
+
+    # Source types where identity drift is most damaging (shape narrative/competitive output).
+    opinion_types = frozenset({"competitors", "forums", "valuation", "news", "review"})
+
+    # Build a set of lowercase tokens from program name + brand for title matching.
+    target_tokens: set[str] = set()
+    for text in (program_name, brand):
+        if text:
+            target_tokens.update(t.lower() for t in re.split(r"[\s\-/]+", text) if len(t) > 2)
+
+    result = []
+    for url in urls:
+        if url.source_type not in opinion_types or not target_tokens:
+            result.append(url)
+            continue
+        title_lower = (url.title or "").lower()
+        if any(tok in title_lower for tok in target_tokens):
+            result.append(url)
+        else:
+            # Title gives no signal for this programme — mild penalty
+            result.append(url.model_copy(update={"score": url.score * 0.6}))
+
+    return sorted(result, key=lambda u: u.score, reverse=True)
 
 
 class TavilyClient(Protocol):

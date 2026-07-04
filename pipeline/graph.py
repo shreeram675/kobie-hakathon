@@ -14,7 +14,7 @@ from pipeline.stages.app_ratings_fetcher import build_app_ratings_packet, fetch_
 from pipeline.stages.direct_url_seeder import seed_urls
 from pipeline.stages.wikipedia_fetcher import build_wikipedia_block, fetch_wikipedia_summary
 from pipeline.stages.query_generator import generate_queries
-from pipeline.stages.retrieval import retrieve_urls
+from pipeline.stages.retrieval import domain_penalize_urls, retrieve_urls
 from core.schemas import AgentState, FirecrawlScrapeOutput, NormalizedObjectPacket, ScrapedUrlBlock, PipelineError, build_initial_state, new_id, now_iso
 from pipeline.stages.validation import validate_conversation
 
@@ -199,9 +199,20 @@ def retrieval_node(state: AgentState) -> dict:
             "updated_at": now_iso(),
         }
 
+    filtered_urls = domain_penalize_urls(
+        retrieval_result.urls,
+        program_domain=state.get("domain") or "",
+        program_name=state.get("program_name") or "",
+        brand=state.get("brand") or "",
+    )
+    retrieval_result = retrieval_result.model_copy(update={
+        "urls": filtered_urls,
+        "unique_result_count": len(filtered_urls),
+    })
+
     return {
         "retrieval_result": retrieval_result,
-        "retrieved_urls": retrieval_result.urls,
+        "retrieved_urls": filtered_urls,
         "updated_at": now_iso(),
     }
 

@@ -450,7 +450,12 @@ export interface AgentState {
   /** Coarse lifecycle of the whole run. */
   status: "running" | "done" | "error" | "clarification_needed" | "cache_hit_pending" | "cancelled";
   /** Present when status is cache_hit_pending — metadata about the found cached run. */
-  cache_hit?: { program_name: string; brand?: string | null; run_date?: string | null; age_days?: number | null } | null;
+  cache_hit?: {
+    program_name: string;
+    brand?: string | null;
+    run_date?: string | null;
+    age_days?: number | null;
+  } | null;
   /** Conversation history for single/converse mode (grounded in that run's data). */
   conversation?: ConverseTurn[];
   /** Conversation history for comparison runs (grounded in comparison brief + all program data). */

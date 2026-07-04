@@ -158,10 +158,14 @@ PROGRAM RULES QUERY (T&C)
 
 SENTIMENT SOURCES — use these; do not invent others
   Trustpilot is seeded AUTOMATICALLY — do NOT generate a site:trustpilot.com query.
-  AIRLINE / HOTEL programs only: site:flyertalk.com [program] complaints
-  INDIA programs (IN):           site:technofino.com [program]  OR  site:cardexpert.in [program]
-  India news / scale:            [program] site:economictimes.indiatimes.com
-  ALL other programs:            [program] reviews complaints (general web sentiment query)
+  AIRLINE / HOTEL programs only:            site:flyertalk.com [program] complaints
+  INDIA Banking/Credit Card programs only:  site:technofino.com [program]  OR  site:cardexpert.in [program]
+  India news / scale (any India domain):    [program] site:economictimes.indiatimes.com
+  ALL other programs:                       [program] reviews complaints (general web sentiment query)
+
+  CRITICAL: site:technofino.com and site:cardexpert.in cover banking and credit cards ONLY.
+  Never use them for Airline, Hotel, Retail, Supermarket, Food & Beverage, or any non-banking domain.
+  Any Airline or Hotel program (including India-based) uses site:flyertalk.com for sentiment, NOT technofino or cardexpert.
 
 BLOCKED DOMAINS — never generate queries targeting:
 ✗ reddit.com (all subdomains — Firecrawl cannot scrape it)
@@ -180,14 +184,28 @@ Violations here produce queries that return irrelevant pages and waste extractio
   Permitted site: restrictions and their conditions:
     site:trustpilot.com    — universal, always permitted
     site:flyertalk.com     — airline and hotel programs only
-    site:technofino.com    — India banking/credit card programs only
-    site:cardexpert.in     — India banking/credit card programs only
+    site:technofino.com    — India Banking/Credit Card programs only (NEVER airline or other)
+    site:cardexpert.in     — India Banking/Credit Card programs only (NEVER airline or other)
     site:economictimes.indiatimes.com — India programs only
 ✗ DO NOT reference tier names, earn rates, or partner names you have not confirmed for this program.
 ✗ DO NOT generate a membership_count / financial query if the corporate parent is unknown or private
   with no public filings.
 ✗ DO NOT generate queries for fields that are structurally inapplicable
   (e.g. "transfer partners" for a closed-loop QSR program with no transfer partners).
+
+DOMAIN-LOCKED COMPETITOR RULE — strictly enforced
+✗ Competitor queries must ONLY name programs from the SAME domain category as the target program.
+  Each domain competes only within itself:
+    Airline        → other airline frequent-flyer programs
+    Hotel          → other hotel loyalty programs
+    Retail         → other retail loyalty / points programs
+    Supermarket    → other grocery / hypermarket loyalty programs
+    Banking/Credit Card → other bank or co-brand card reward programs
+    Food & Beverage / Food Delivery → other QSR or delivery loyalty programs
+    Telecom / Fuel / E-commerce / Healthcare / Entertainment / Mobility → same domain only
+  NEVER name a program from a different domain category as a competitor — a credit card program
+  is not a competitor of an airline program, a hotel program is not a competitor of a retail
+  program, etc. A comparison article about the wrong domain is not a valid competitor source.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 B2B CORPORATE PROGRAM RULES

@@ -306,8 +306,30 @@ def _snapshot_meta(snapshot: dict) -> dict[str, Any]:
 def _save_program_snapshot_to_db(program_name: str, brand: str | None,
                                   country_or_region: str | None,
                                   program_state: dict[str, Any]) -> None:
-    """Persist a completed single-program state dict to the DB snapshot cache."""
+    """Persist a completed single-program state dict to the DB snapshot cache.
+
+    Only replaces an existing snapshot when the new run's data_quality is
+    strictly higher, avoiding redundant overwrites with worse data.
+    """
+    new_quality = float(program_state.get("data_quality") or 0.0)
     try:
+        existing = _db.find_program_snapshot(_db_conn, program_name)
+        if existing is not None:
+            try:
+                old_state = json.loads(existing["program_state_json"])
+                old_quality = float(old_state.get("data_quality") or 0.0)
+            except Exception:
+                old_quality = 0.0
+            if new_quality <= old_quality:
+                logger.info(
+                    "Skipping snapshot update for %s — existing quality %.3f >= new quality %.3f",
+                    program_name, old_quality, new_quality,
+                )
+                return
+            logger.info(
+                "Replacing snapshot for %s — new quality %.3f > existing %.3f",
+                program_name, new_quality, old_quality,
+            )
         _db.save_program_snapshot(
             _db_conn,
             program_name,
@@ -316,7 +338,7 @@ def _save_program_snapshot_to_db(program_name: str, brand: str | None,
             json.dumps(program_state, default=str),
             now_iso(),
         )
-        logger.info("Saved snapshot for %s", program_name)
+        logger.info("Saved snapshot for %s (quality %.3f)", program_name, new_quality)
     except Exception:
         logger.exception("Failed to save snapshot for %s", program_name)
 
@@ -860,7 +882,6 @@ def run_pipeline(record: RunRecord) -> None:
             _save_program_result(record, i, success, all_claims, all_names)
             if success:
                 any_success = True
-                # Save freshly-run program to cache
                 prog_state = record.program_states[i]
                 if prog_state:
                     _save_program_snapshot_to_db(
@@ -941,7 +962,6 @@ def run_pipeline(record: RunRecord) -> None:
             # already has the complete state and record.state only has input_validator output.
             if record.cached_response is None:
                 program_name = record.state.get("program_name") or record.user_input
-                # Save completed analysis to cache
                 snap = _make_program_state_snapshot(record)
                 _save_program_snapshot_to_db(
                     program_name,

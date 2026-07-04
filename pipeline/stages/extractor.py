@@ -538,10 +538,56 @@ def _build_extraction_context_preamble(context: dict) -> str:
     brand = context.get("brand")
     program_subtype = context.get("program_subtype")
     reference_year = context.get("reference_year")
+    program_domain = (context.get("domain") or "").strip()
+    country_or_region = (context.get("country_or_region") or "").strip()
 
     if program_name or brand:
         parts = [p for p in [program_name, f"({brand})" if brand and brand != program_name else None] if p]
-        lines.append(f"TARGET PROGRAM: {' '.join(parts)}")
+        header = f"TARGET PROGRAM: {' '.join(parts)}"
+        if program_domain:
+            header += f"  |  DOMAIN: {program_domain}"
+        if country_or_region:
+            header += f"  |  REGION: {country_or_region}"
+        lines.append(header)
+
+        # Program-identity isolation — fires for every program regardless of domain.
+        # This prevents contamination from similarly-named programs, co-brand card
+        # product descriptions, and competitor data being misread as the target's own data.
+        target_label = program_name or brand
+        brand_label = brand or program_name
+        lines += [
+            "",
+            "PROGRAM IDENTITY ISOLATION — STRICTLY ENFORCED:",
+            f"You are extracting data ONLY for the loyalty programme: '{target_label}' operated by '{brand_label}'.",
+            "Apply these rules to every field in every chunk, regardless of source:",
+            "",
+            f"1. ATTRIBUTION CHECK — Before extracting any value, confirm the chunk text explicitly",
+            f"   names '{target_label}' or '{brand_label}' as the subject of that fact.",
+            f"   If the value is stated about a DIFFERENT named programme or brand, REJECT it — even",
+            f"   if that programme operates in the same industry or country as '{target_label}'.",
+            "",
+            "2. MULTI-PROGRAMME CHUNKS — If a chunk compares or lists multiple loyalty programmes:",
+            f"   extract ONLY the row/section that explicitly refers to '{target_label}' / '{brand_label}'.",
+            "   Do not extract values from columns or rows belonging to other programmes.",
+            "",
+            "3. CO-BRAND CARD SEPARATION — A co-branded credit card and the loyalty programme",
+            f"   it links to are DIFFERENT products. For '{target_label}':",
+            "   - Extract loyalty programme earn rates (points/miles/rewards earned through",
+            "     the programme's own channels — purchases, stays, flights, transactions, etc.).",
+            "   - Do NOT extract card-product metrics (APR, annual card fee, credit limit, minimum",
+            "     payment, welcome bonus offer terms) as loyalty programme fields.",
+            "   - If earn rates are described only in the context of card spend (not base programme",
+            "     earn), mark the field AMBIGUOUS unless the chunk also states the base earn rate.",
+            "",
+            "4. COMPETITOR FIELDS — For closest_competitors / key_differentiators / weaknesses:",
+            f"   only extract data that is explicitly framed as a comparison TO '{target_label}'.",
+            "   Do NOT list a programme as a competitor just because it appears in the same article.",
+            "   A competitor must be explicitly identified as such in the source text.",
+            "",
+            "5. AMBIGUITY RULE — If you cannot unambiguously attribute a value to the target",
+            f"   programme ('{target_label}') from the chunk text alone, return status AMBIGUOUS.",
+            "   Never guess or infer attribution from context.",
+        ]
 
     if program_subtype == "B2B":
         lines += [

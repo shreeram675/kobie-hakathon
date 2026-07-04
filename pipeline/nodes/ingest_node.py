@@ -149,7 +149,7 @@ def _resolve_target_fields(field_name: str, valid_fields: set[str]) -> list[str]
 def _build_extraction_context(state: AgentState) -> dict[str, Any]:
     """Build the context dict passed to the extraction prompt for every batch in this run."""
     ctx: dict[str, Any] = {"reference_year": datetime.now(timezone.utc).year}
-    for key in ("program_name", "brand", "program_subtype"):
+    for key in ("program_name", "brand", "program_subtype", "domain", "country_or_region"):
         value = state.get(key)
         if value is not None:
             ctx[key] = value

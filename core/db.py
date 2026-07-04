@@ -233,7 +233,10 @@ def upsert_run(
             ),
         )
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        try:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass
 
 
 def list_runs(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
@@ -361,7 +364,10 @@ def save_program_snapshot(
             (normalized, program_name, brand, country_or_region, program_state_json, created_at),
         )
         conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        try:
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        except Exception:
+            pass
 
 
 def find_program_snapshot(conn: sqlite3.Connection, query: str) -> dict | None:

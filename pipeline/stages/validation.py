@@ -81,11 +81,45 @@ ANTI-HALLUCINATION RULES
 - Always prioritize accuracy over assumptions
 
 ═══════════════════════════════════════════════════════
-DOMAIN FIELD
+DOMAIN AND REGION — ALWAYS REQUIRED, NEVER OMIT
 ═══════════════════════════════════════════════════════
-Use one of: Airline, Hotel, Retail, Banking/Credit Card, Coalition, Telecom,
-Fuel, E-commerce, Food & Beverage, Food Delivery, Healthcare, Entertainment,
-Education, Mobility, Fintech, Supermarket, Other.
+
+domain (required — pick the single most specific match; never null or "Other"
+  for well-known programs)
+
+  Airline            — programs run by airlines (frequent flyer, miles)
+  Hotel              — programs run by hotel chains
+  Retail             — physical or mixed retail (department stores, fashion, electronics)
+  Banking/Credit Card — bank-issued or co-brand credit card programs
+  Coalition          — multi-brand / multi-partner programs (Aeroplan, Nectar, Payback)
+  Telecom            — mobile operators, internet providers
+  Fuel               — petrol station / gas station programs
+  E-commerce         — online-only retail (Amazon, Flipkart)
+  Food & Beverage    — cafes, restaurants, QSR chains (Starbucks, Dunkin', McDonald's)
+  Food Delivery      — meal-delivery platforms (DoorDash, Swiggy, Zomato)
+  Healthcare         — pharmacies, health insurance, hospital networks
+  Entertainment      — streaming, cinemas, gaming, sports clubs
+  Education          — ed-tech platforms, universities
+  Mobility           — ride-hailing, car rental, EV charging (Uber, Hertz)
+  Fintech            — digital wallets, BNPL, neobanks (without a physical card)
+  Supermarket        — grocery chains and hypermarkets
+  Other              — only when no category above fits at all
+
+  Classification rules:
+  • Use the primary business of the sponsoring BRAND, not the rewards mechanic.
+  • Airlines with co-brand cards → Airline (aviation is the primary business).
+  • Banks that issue airline miles → Banking/Credit Card.
+  • Grocery stores with fuel rewards → Supermarket.
+  • Never return "Other" for a well-known program — find the correct category.
+
+country_or_region (required — always set; never null or empty)
+  The primary country or geographic region where the program operates.
+  Write the full English name — no abbreviations (not "US", write "United States").
+  Examples: "United States", "United Kingdom", "India", "Canada", "Australia",
+  "Germany", "France", "Singapore", "UAE", "South Africa", "Brazil".
+  Use "Global" only if the program has no dominant home market.
+  When a program is primarily associated with one country (even if
+  internationally available), always use that country.
 
 ═══════════════════════════════════════════════════════
 OUTPUT FORMAT — valid JSON only, no Markdown fences
@@ -139,6 +173,22 @@ Rejected:
 ═══════════════════════════════════════════════════════
 OUTPUT FIELDS
 ═══════════════════════════════════════════════════════
+
+domain (string) — REQUIRED in every resolved response
+  Must be exactly one of the allowed values:
+  Airline, Hotel, Retail, Banking/Credit Card, Coalition, Telecom,
+  Fuel, E-commerce, Food & Beverage, Food Delivery, Healthcare,
+  Entertainment, Education, Mobility, Fintech, Supermarket, Other.
+  Never leave this field null or empty. If no better fit exists, use "Other".
+
+country_or_region (string) — REQUIRED in every resolved response
+  The primary country or region where this loyalty program operates.
+  Use the full English country name (e.g. "United States", "United Kingdom",
+  "India", "Australia", "Canada", "Germany", "Singapore").
+  For multi-country programs use the region (e.g. "Global", "Europe",
+  "Southeast Asia"). Never leave this field null or empty — default to
+  "Global" only when the program genuinely operates across many countries
+  with no dominant home market.
 
 official_domain (string)
   The program's primary web domain for T&C and FAQ pages.
@@ -289,12 +339,14 @@ def _parse_verifier_output(user_input: str, payload: dict[str, Any]) -> Validati
                 program_type=raw_sc.get("program_type"),
                 entity_disambiguation=raw_sc.get("entity_disambiguation"),
             )
+        raw_domain = payload.get("domain")
+        raw_region = payload.get("country_or_region")
         identity = ProgramIdentity(
             raw_input=user_input,
             program_name=str(payload["program_name"]),
             brand=str(payload.get("brand") or payload["program_name"]),
-            domain=normalize_domain(payload.get("domain")),
-            country_or_region=payload.get("country_or_region"),
+            domain=normalize_domain(raw_domain) if raw_domain else "Other",
+            country_or_region=str(raw_region).strip() if raw_region else "Global",
             program_subtype=_parse_program_subtype(payload.get("program_subtype"), str(payload["program_name"])),
             confidence=confidence,
             official_domain=payload.get("official_domain") or None,

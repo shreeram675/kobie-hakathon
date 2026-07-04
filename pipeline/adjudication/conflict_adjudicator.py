@@ -108,6 +108,91 @@ SOURCE_TYPE_TO_AUTHORITY = {
 }
 DEFAULT_AUTHORITY = "aggregator"
 
+# URL path segments that strongly signal a page is about a specific product category.
+# These are used to detect when a source URL is clearly off-topic for the programme domain.
+_CATEGORY_PATH_SIGNALS: dict[str, frozenset[str]] = {
+    "credit_card": frozenset({
+        "/credit-card", "/credit-cards", "/creditcard", "/cards/credit",
+        "/secured-card", "/best-cards", "/credit-score",
+    }),
+    "airline_miles": frozenset({
+        "/frequent-flyer", "/airline-miles", "/airline-rewards",
+        "/award-chart", "/mileage-program", "/airline-loyalty",
+    }),
+    "hotel_rewards": frozenset({
+        "/hotel-rewards", "/hotel-loyalty", "/hotel-points", "/hotel-status",
+    }),
+    "mortgage_banking": frozenset({
+        "/mortgage", "/home-loan", "/refinance", "/personal-loan", "/savings-account",
+    }),
+    "insurance": frozenset({
+        "/health-insurance", "/car-insurance", "/life-insurance", "/term-insurance",
+    }),
+    "grocery_retail": frozenset({
+        "/grocery-rewards", "/supermarket-loyalty", "/store-card",
+    }),
+    "ride_hailing": frozenset({
+        "/ride-hailing", "/cab-booking", "/taxi-rewards",
+    }),
+}
+
+# For each programme domain, which path-signal categories are clearly off-topic?
+# Covers every loyalty programme domain the input validator can produce.
+_OFFTOPIC_SIGNALS_FOR_DOMAIN: dict[str, frozenset[str]] = {
+    "airline":             frozenset({"credit_card", "hotel_rewards", "mortgage_banking", "insurance", "grocery_retail", "ride_hailing"}),
+    "hotel":               frozenset({"credit_card", "airline_miles", "mortgage_banking", "insurance", "grocery_retail", "ride_hailing"}),
+    "retail":              frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "banking/credit card": frozenset({"airline_miles", "hotel_rewards", "mortgage_banking", "insurance", "grocery_retail", "ride_hailing"}),
+    "coalition":           frozenset({"mortgage_banking", "insurance"}),
+    "telecom":             frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "fuel":                frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "e-commerce":          frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "food & beverage":     frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "food delivery":       frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "healthcare":          frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking"}),
+    "entertainment":       frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "education":           frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "mobility":            frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance", "grocery_retail"}),
+    "fintech":             frozenset({"airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+    "supermarket":         frozenset({"credit_card", "airline_miles", "hotel_rewards", "mortgage_banking", "insurance"}),
+}
+
+
+def _dampen_authority_for_domain(
+    authority: str,
+    source_url: str | None,
+    program_domain: str,
+    program_name: str = "",
+    brand: str = "",
+) -> str:
+    """Lower authority when a URL path clearly signals an off-topic product category.
+
+    Works for every programme domain type — the check uses the URL path against a
+    per-domain off-topic signal map, not a hardcoded pair of allowed domains.
+    Only "official" and "major_publication" authority levels are candidates for
+    downgrade; aggregator/forum/news are already low-authority and unaffected.
+    """
+    if not source_url or authority not in {"official", "major_publication"}:
+        return authority
+
+    domain_lower = program_domain.lower()
+    offtopic_categories = _OFFTOPIC_SIGNALS_FOR_DOMAIN.get(domain_lower)
+    if not offtopic_categories:
+        return authority
+
+    path = source_url.lower()
+    for prefix in ("https://", "http://"):
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+    path = "/" + "/".join(path.split("/")[1:])  # strip host, keep /path...
+
+    for category in offtopic_categories:
+        signals = _CATEGORY_PATH_SIGNALS.get(category, frozenset())
+        if any(sig in path for sig in signals):
+            return "aggregator"
+
+    return authority
+
 
 def _classify_field_strategy(field_name: str) -> str:
     suffix = field_name.split(".")[-1].lower()
@@ -213,11 +298,17 @@ def adjudicator_node(state: AgentState) -> AgentState:
     """
 
     run_id = state.get("run_id") or ""
+    program_domain = str(state.get("domain") or "")
+    program_name = str(state.get("program_name") or "")
+    brand = str(state.get("brand") or "")
     raw_conflicts = [item for item in state.get("conflicts") or [] if isinstance(item, dict) and "claim_a" in item]
     if not raw_conflicts:
         raw_conflicts = detect_conflicts_from_packets(
             state.get("normalized_packets", []),
             state.get("raw_documents", []),
+            program_domain=program_domain,
+            program_name=program_name,
+            brand=brand,
         )
 
     adjudicated: list[dict[str, Any]] = []
@@ -622,6 +713,9 @@ def _entries_from_debate(conflict: dict[str, Any], result: dict[str, Any]) -> li
 def detect_conflicts_from_packets(
     packets: list[NormalizedObjectPacket],
     raw_documents: list[RawDocument],
+    program_domain: str = "",
+    program_name: str = "",
+    brand: str = "",
 ) -> list[dict[str, Any]]:
     """Find fields where two sources disagree and build debate-ready conflicts.
 
@@ -664,8 +758,8 @@ def detect_conflicts_from_packets(
             key=lambda group: (len(group["source_urls"]), group["confidence"]),
             reverse=True,
         )
-        claim_a = _claim_from_group(ranked[0], documents_by_url)
-        claim_b = _claim_from_group(ranked[1], documents_by_url)
+        claim_a = _claim_from_group(ranked[0], documents_by_url, program_domain, program_name, brand)
+        claim_b = _claim_from_group(ranked[1], documents_by_url, program_domain, program_name, brand)
         if claim_a["source_url"] == claim_b["source_url"]:
             continue
         conflicts.append(
@@ -777,14 +871,23 @@ def apply_adjudication_to_field_report(
     )
 
 
-def _claim_from_group(group: dict[str, Any], documents_by_url: dict[str, RawDocument]) -> dict[str, Any]:
+def _claim_from_group(
+    group: dict[str, Any],
+    documents_by_url: dict[str, RawDocument],
+    program_domain: str = "",
+    program_name: str = "",
+    brand: str = "",
+) -> dict[str, Any]:
     source_url = _best_source_url(group["source_urls"], documents_by_url)
     document = documents_by_url.get(source_url)
+    authority = _dampen_authority_for_domain(
+        _document_authority(document), source_url, program_domain, program_name, brand
+    )
     return {
         "value": str(group["value"]),
         "source_url": source_url,
         "date": _document_date(document),
-        "authority": _document_authority(document),
+        "authority": authority,
         "corroboration": len(group["source_urls"]),
         "confidence": round(float(group["confidence"]), 4),
     }

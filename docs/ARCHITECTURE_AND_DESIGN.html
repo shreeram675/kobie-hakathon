@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kobie — Architecture &amp; Design Document</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    color: #0f172a;
+    background: #f8fafc;
+    line-height: 1.6;
+  }
+
+  .page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px;
+    background: #ffffff;
+  }
+
+  /* ---- COVER ---- */
+  .cover {
+    background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 55%, #2563eb 100%);
+    color: #ffffff;
+    padding: 64px 48px 48px;
+    margin: -40px -40px 0;
+    page-break-after: always;
+  }
+  .cover-logo {
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    opacity: 0.7;
+    margin-bottom: 24px;
+  }
+  .cover-title {
+    font-size: 64px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.05;
+    margin-bottom: 16px;
+  }
+  .cover-subtitle {
+    font-size: 22px;
+    font-weight: 600;
+    opacity: 0.9;
+    margin-bottom: 10px;
+  }
+  .cover-tagline {
+    font-size: 14px;
+    opacity: 0.75;
+    margin-bottom: 32px;
+    font-style: italic;
+  }
+  .cover-version {
+    font-size: 12px;
+    opacity: 0.6;
+    margin-bottom: 40px;
+    letter-spacing: 0.05em;
+  }
+  .cover-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .cover-pill {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: #fff;
+    border-radius: 9999px;
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+  }
+
+  /* ---- SECTIONS ---- */
+  .section {
+    margin-top: 48px;
+    page-break-before: always;
+  }
+  .section:first-of-type { page-break-before: avoid; }
+
+  .section-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1d4ed8;
+    border-left: 4px solid #1d4ed8;
+    padding-left: 12px;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .section-number {
+    opacity: 0.5;
+    margin-right: 6px;
+  }
+
+  .subsection-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e3a8a;
+    margin: 24px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .subsection-title::before {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #1d4ed8;
+    flex-shrink: 0;
+  }
+
+  p { margin-bottom: 12px; color: #475569; }
+
+  /* ---- CARDS ---- */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .card-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .card-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .card-numbered {
+    border-left: 3px solid #1d4ed8;
+  }
+  .card-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background: #1d4ed8;
+    color: white;
+    border-radius: 50%;
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .card-title {
+    font-weight: 700;
+    font-size: 13px;
+    color: #0f172a;
+    margin-bottom: 6px;
+  }
+  .card-body {
+    font-size: 12.5px;
+    color: #475569;
+    line-height: 1.5;
+  }
+
+  /* ---- PILLS ---- */
+  .pill {
+    display: inline-block;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border-radius: 9999px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .pill-green  { background: #f0fdf4; color: #15803d; }
+  .pill-amber  { background: #fffbeb; color: #b45309; }
+  .pill-red    { background: #fef2f2; color: #b91c1c; }
+  .pill-violet { background: #f5f3ff; color: #6d28d9; }
+  .pill-teal   { background: #f0fdfa; color: #0f766e; }
+  .pill-gray   { background: #f1f5f9; color: #475569; }
+
+  /* ---- CALLOUTS ---- */
+  .callout {
+    background: #eff6ff;
+    border-left: 4px solid #3b82f6;
+    padding: 12px 16px;
+    border-radius: 0 6px 6px 0;
+    margin: 16px 0;
+    font-size: 13px;
+    color: #1e3a8a;
+  }
+  .callout-amber {
+    background: #fffbeb;
+    border-left-color: #d97706;
+    color: #92400e;
+  }
+  .callout-green {
+    background: #f0fdf4;
+    border-left-color: #16a34a;
+    color: #14532d;
+  }
+  .callout-red {
+    background: #fef2f2;
+    border-left-color: #dc2626;
+    color: #7f1d1d;
+  }
+  .callout-gray {
+    background: #f8fafc;
+    border-left-color: #94a3b8;
+    color: #475569;
+  }
+  .callout strong { font-weight: 700; }
+  .callout code  { font-family: monospace; font-size: 11px; background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; }
+
+  /* ---- TABLES ---- */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13px;
+  }
+  th {
+    background: #1d4ed8;
+    color: #ffffff;
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+  }
+  td {
+    padding: 9px 12px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #374151;
+    vertical-align: top;
+  }
+  tr:nth-child(even) td { background: #f8fafc; }
+  td strong { color: #0f172a; font-weight: 600; }
+  td code { font-family: monospace; font-size: 11px; background: #f1f5f9; padding: 1px 4px; border-radius: 3px; }
+
+  /* ---- INLINE CODE ---- */
+  .code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    background: #f1f5f9;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 12px;
+    color: #0f172a;
+  }
+
+  /* ---- LISTS ---- */
+  ul, ol { padding-left: 20px; margin: 12px 0; color: #475569; }
+  li { margin-bottom: 6px; font-size: 13.5px; }
+  li strong { color: #0f172a; }
+
+  /* ---- TIMELINE ---- */
+  .timeline { margin: 16px 0; }
+  .timeline-item {
+    display: flex;
+    gap: 16px;
+    padding: 12px 0;
+    border-bottom: 1px solid #f1f5f9;
+    align-items: flex-start;
+  }
+  .timeline-item:nth-child(even) { background: #f8fafc; padding: 12px 8px; }
+  .timeline-badge {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: #1d4ed8;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .timeline-content {}
+  .timeline-title { font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 3px; }
+  .timeline-desc { font-size: 12.5px; color: #475569; }
+
+  /* ---- OBJECTIVES ---- */
+  .objectives-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 16px 0;
+  }
+  .objective-item {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 12px;
+    background: #f8fafc;
+    border-radius: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  .objective-num {
+    flex-shrink: 0;
+    width: 26px;
+    height: 26px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1.5px solid #bfdbfe;
+  }
+  .objective-text { font-size: 13px; color: #374151; }
+
+  /* ---- FIELD CATEGORY CARDS ---- */
+  .field-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .field-card-title {
+    font-weight: 700;
+    font-size: 12px;
+    color: #1d4ed8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #e2e8f0;
+  }
+  .field-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .field-tag {
+    font-size: 11px;
+    background: #f1f5f9;
+    color: #475569;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-family: monospace;
+  }
+
+  /* ---- INTEGRATION CARDS ---- */
+  .int-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .int-card-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 8px;
+  }
+  .int-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: #94a3b8;
+    margin-top: 8px;
+    margin-bottom: 2px;
+  }
+  .int-value {
+    font-size: 12.5px;
+    color: #475569;
+  }
+
+  /* ---- ROADMAP CARDS ---- */
+  .roadmap-card {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .roadmap-num {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    background: #1d4ed8;
+    color: white;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .roadmap-title { font-weight: 700; font-size: 13px; color: #0f172a; margin-bottom: 4px; }
+  .roadmap-desc  { font-size: 12.5px; color: #475569; }
+
+  /* ---- OBSERVABILITY CARDS ---- */
+  .obs-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 16px 0;
+  }
+  .obs-card {
+    border-radius: 8px;
+    padding: 16px;
+    border: 1px solid;
+  }
+  .obs-card-title {
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .obs-card ul { margin: 0; padding-left: 16px; }
+  .obs-card li { font-size: 12.5px; margin-bottom: 5px; }
+
+  /* ---- SVG ---- */
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .svg-wrap { margin: 20px 0; overflow: visible; }
+
+  /* ---- PRINT ---- */
+  @media print {
+    body { background: #fff; }
+    .page { padding: 20px; }
+    .cover { margin: -20px -20px 0; }
+    .section { page-break-before: always; }
+    .card, .int-card, .obs-card, .roadmap-card { box-shadow: none; }
+    .card-grid, .card-grid-2, .card-grid-3 { page-break-inside: avoid; }
+    table { page-break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<!-- ========== COVER ========== -->
+<div class="cover">
+  <div class="cover-logo">Architecture &amp; Design Document</div>
+  <div class="cover-title">Kobie</div>
+  <div class="cover-subtitle">Architecture &amp; Design Document</div>
+  <div class="cover-tagline">Autonomous Competitive Intelligence Agent for Loyalty Programs</div>
+  <div class="cover-version">Version 1.0 &nbsp;·&nbsp; 2026</div>
+  <div class="cover-pills">
+    <span class="cover-pill">FastAPI</span>
+    <span class="cover-pill">LangGraph</span>
+    <span class="cover-pill">Gemini 2.5 Flash</span>
+    <span class="cover-pill">Groq</span>
+    <span class="cover-pill">Next.js 14</span>
+    <span class="cover-pill">SQLite WAL</span>
+  </div>
+</div>
+
+<!-- ========== SECTION 1: PROJECT OVERVIEW ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">1</span>Project Overview</div>
+  <p>Kobie is an end-to-end autonomous intelligence agent that researches and synthesises competitive profiles for consumer loyalty programs. Given a program name (or a fuzzy description), Kobie resolves the identity, plans a targeted search campaign, retrieves and scrapes evidence from multiple source types, extracts schema-grounded facts, adjudicates conflicts across sources, and produces a narrative brief plus an interactive grounded Q&amp;A interface — all without relying on LLM training memory for factual claims.</p>
+
+  <div class="card-grid">
+    <div class="card card-numbered">
+      <div class="card-number">1</div>
+      <div class="card-title">Input Resolution</div>
+      <div class="card-body">LLM-backed identity validator resolves ambiguous program names to a canonical identity, with up to 3 clarification rounds.</div>
+    </div>
+    <div class="card card-numbered">
+      <div class="card-number">2</div>
+      <div class="card-title">Research Planning</div>
+      <div class="card-body">Up to 15 targeted queries planned by Gemini across 10 source types with coverage and priority metadata.</div>
+    </div>
+    <div class="card card-numbered">
+      <div class="card-number">3</div>
+      <div class="card-title">Evidence Extraction</div>
+      <div class="card-body">Schema-grounded facts with per-field confidence scores and source attribution for every extracted value.</div>
+    </div>
+    <div class="card card-numbered">
+      <div class="card-number">4</div>
+      <div class="card-title">Conflict Adjudication</div>
+      <div class="card-body">5-step strategy ladder: deterministic resolution to adversarial debate with judge verdict and human-review queue.</div>
+    </div>
+    <div class="card card-numbered">
+      <div class="card-number">5</div>
+      <div class="card-title">Narrative Synthesis</div>
+      <div class="card-body">600–900 word analyst brief synthesised from adjudicated evidence; never from LLM training memory.</div>
+    </div>
+    <div class="card card-numbered">
+      <div class="card-number">6</div>
+      <div class="card-title">Grounded Q&amp;A</div>
+      <div class="card-body">Conversational interface with answers strictly traceable to <span class="code">field_report</span> extracted evidence.</div>
+    </div>
+  </div>
+
+  <div class="callout callout-gray">
+    <strong>Implementation:</strong> FastAPI backend (<span class="code">server.py</span>) &nbsp;·&nbsp; LangGraph pipeline (<span class="code">pipeline/graph.py</span>) &nbsp;·&nbsp; SQLite persistence (<span class="code">core/db.py</span>) &nbsp;·&nbsp; Next.js 14 frontend (<span class="code">frontend/</span>)
+  </div>
+</div>
+
+<!-- ========== SECTION 2: PROBLEM STATEMENT ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">2</span>Problem Statement</div>
+  <p>Competitive intelligence for loyalty programs is uniquely difficult. Unlike most industries, loyalty programs are characterised by:</p>
+
+  <div class="card-grid-2">
+    <div class="card" style="border-left: 3px solid #dc2626;">
+      <div class="card-title" style="color:#dc2626;">Fragmented</div>
+      <div class="card-body">No single authoritative source covers all mechanics. Earn rates, tier thresholds, partner lists, and valuations are distributed across official T&amp;Cs, blogs, forums, and third-party comparison sites.</div>
+    </div>
+    <div class="card" style="border-left: 3px solid #d97706;">
+      <div class="card-title" style="color:#d97706;">Volatile</div>
+      <div class="card-body">Earn rates, tiers, and valuations change frequently. High-volatility fields (<span class="code">HIGH_VOLATILITY_FIELDS</span>) require recency-aware adjudication and explicit staleness warnings.</div>
+    </div>
+    <div class="card" style="border-left: 3px solid #ea580c;">
+      <div class="card-title" style="color:#ea580c;">Contradictory</div>
+      <div class="card-body">Official program pages, independent blogs, and user forums routinely disagree on the same fact — requiring explicit conflict detection and adjudication rather than simple majority rules.</div>
+    </div>
+    <div class="card" style="border-left: 3px solid #7c3aed;">
+      <div class="card-title" style="color:#7c3aed;">Expensive</div>
+      <div class="card-body">Manual analysis requires analysts to cross-reference many pages, assess authority, reconcile contradictions, and produce a brief — a process that can take hours per program.</div>
+    </div>
+  </div>
+
+  <div class="callout callout-red">
+    <strong>Key constraint:</strong> "Never use LLM training memory as a source of loyalty-program facts." Every claim must be traceable to a retrieved, scraped source URL.
+  </div>
+</div>
+
+<!-- ========== SECTION 3: OBJECTIVES ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">3</span>Objectives</div>
+  <div class="objectives-grid">
+    <div class="objective-item">
+      <div class="objective-num">1</div>
+      <div class="objective-text">Resolve ambiguous input to canonical identity (max 3 clarification rounds, 5-min timeout each)</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">2</div>
+      <div class="objective-text">Plan and execute up to 15 targeted queries per program across 10 distinct source types</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">3</div>
+      <div class="objective-text">Extract schema-conformant facts with <span class="code">EXTRACTED</span> / <span class="code">NOT_FOUND</span> / <span class="code">AMBIGUOUS</span> status and confidence per field</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">4</div>
+      <div class="objective-text">Resolve conflicts via cheapest-sufficient strategy ladder from deterministic merge to adversarial debate</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">5</div>
+      <div class="objective-text">Produce 600–900 word analyst brief and grounded Q&amp;A with answers traceable to <span class="code">field_report</span></div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">6</div>
+      <div class="objective-text">Two-program comparison with category-level verdicts and a comparative brief</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num">7</div>
+      <div class="objective-text">Track per-stage cost (tokens/USD), cache completed runs, survive server restarts via SQLite WAL</div>
+    </div>
+    <div class="objective-item">
+      <div class="objective-num"> </div>
+      <div class="objective-text">&nbsp;</div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== SECTION 4: HIGH-LEVEL ARCHITECTURE ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">4</span>High-Level Architecture</div>
+  <p>Kobie is structured as five horizontal layers. The frontend communicates with the FastAPI backend via REST polling; the backend spawns per-run background threads that execute the LangGraph pipeline; the pipeline reads and writes to SQLite and calls external services.</p>
+
+  <div class="svg-wrap">
+    <svg viewBox="0 0 820 490" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrowA" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#64748b"/>
+        </marker>
+        <marker id="arrowB" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/>
+        </marker>
+        <marker id="arrowC" markerWidth="8" markerHeight="8" refX="2" refY="3" orient="auto-start-reverse">
+          <path d="M8,0 L8,6 L0,3 z" fill="#64748b"/>
+        </marker>
+      </defs>
+
+      <!-- Layer 1: Frontend -->
+      <rect x="10" y="10" width="800" height="80" rx="10" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="22" y="32" font-size="13" font-weight="700" fill="#1e3a8a">Frontend — Next.js 14 / React 18</text>
+      <text x="22" y="52" font-size="11" fill="#3b82f6">PipelineGraph  ·  ClaimsTable  ·  ConflictCard  ·  DebateTimeline  ·  ComparisonTable  ·  PDF export</text>
+      <rect x="640" y="62" width="162" height="22" rx="4" fill="#dbeafe"/>
+      <text x="721" y="77" font-size="10.5" fill="#1d4ed8" text-anchor="middle">TanStack Query polling</text>
+
+      <!-- Arrow: Layer 1 ↔ Layer 2 -->
+      <line x1="410" y1="90" x2="410" y2="108" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowA)" marker-start="url(#arrowC)"/>
+      <rect x="320" y="94" width="80" height="16" rx="3" fill="#f1f5f9"/>
+      <text x="360" y="106" font-size="10" fill="#475569" text-anchor="middle">REST polling</text>
+
+      <!-- Layer 2: Backend -->
+      <rect x="10" y="110" width="800" height="80" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="22" y="132" font-size="13" font-weight="700" fill="#14532d">Backend — FastAPI (server.py)</text>
+      <text x="22" y="152" font-size="11" fill="#15803d">POST /api/run  ·  GET /api/run/{id}  ·  POST /clarify  ·  POST /converse  ·  GET /cache/check</text>
+      <rect x="530" y="158" width="272" height="26" rx="4" fill="#dcfce7" stroke="#86efac" stroke-width="1"/>
+      <text x="666" y="175" font-size="10.5" fill="#15803d" text-anchor="middle">In-memory RunRecord store  |  core/cost_tracker.py</text>
+
+      <!-- Arrow: Layer 2 → Layer 3 -->
+      <line x1="410" y1="190" x2="410" y2="208" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowA)"/>
+      <rect x="300" y="194" width="120" height="16" rx="3" fill="#f1f5f9"/>
+      <text x="360" y="206" font-size="10" fill="#475569" text-anchor="middle">LangGraph invocation</text>
+
+      <!-- Layer 3: Pipeline -->
+      <rect x="10" y="210" width="800" height="80" rx="10" fill="#fefce8" stroke="#d97706" stroke-width="1.5"/>
+      <text x="22" y="232" font-size="13" font-weight="700" fill="#92400e">LangGraph Pipeline — pipeline/graph.py</text>
+
+      <!-- Pipeline node pills -->
+      <rect x="18" y="242" width="90" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="63" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">input_validator</text>
+
+      <rect x="114" y="242" width="90" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="159" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">query_generator</text>
+
+      <rect x="210" y="242" width="80" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="250" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">app_ratings</text>
+
+      <rect x="296" y="242" width="70" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="331" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">retrieval</text>
+
+      <rect x="372" y="242" width="100" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="422" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">web_enrichment</text>
+
+      <rect x="478" y="242" width="105" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="530" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">firecrawl_scraper</text>
+
+      <rect x="589" y="242" width="60" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="619" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">ingest</text>
+
+      <rect x="655" y="242" width="80" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="695" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">adjudication</text>
+
+      <rect x="741" y="242" width="62" height="22" rx="5" fill="#fef9c3" stroke="#fbbf24" stroke-width="1"/>
+      <text x="772" y="257" font-size="9.5" fill="#78350f" text-anchor="middle">narration</text>
+
+      <!-- Arrow: Layer 3 → Layer 4 -->
+      <line x1="410" y1="290" x2="410" y2="308" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowA)"/>
+      <rect x="290" y="294" width="140" height="16" rx="3" fill="#f1f5f9"/>
+      <text x="360" y="306" font-size="10" fill="#475569" text-anchor="middle">SQLite read/write</text>
+
+      <!-- Layer 4: Persistence -->
+      <rect x="10" y="310" width="800" height="60" rx="10" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="22" y="332" font-size="13" font-weight="700" fill="#581c87">Persistence — core/db.py (SQLite WAL)</text>
+      <text x="22" y="354" font-size="11" fill="#7e22ce">run_snapshots  ·  runs  ·  sources  ·  pages  ·  chunks  ·  claims  ·  conflicts  ·  briefs</text>
+
+      <!-- Arrow: Layer 3 → Layer 5 -->
+      <line x1="600" y1="290" x2="700" y2="388" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowA)"/>
+      <rect x="610" y="330" width="80" height="16" rx="3" fill="#f1f5f9"/>
+      <text x="650" y="342" font-size="10" fill="#475569" text-anchor="middle">API calls</text>
+
+      <!-- Layer 5: External Services -->
+      <rect x="10" y="388" width="800" height="88" rx="10" fill="#fff7ed" stroke="#f97316" stroke-width="1.5"/>
+      <text x="22" y="410" font-size="13" font-weight="700" fill="#7c2d12">External Services</text>
+
+      <!-- Service pills row -->
+      <rect x="18" y="420" width="145" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="90" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Google Gemini 2.5 Flash</text>
+
+      <rect x="170" y="420" width="128" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="234" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Groq llama-3.3-70b</text>
+
+      <rect x="305" y="420" width="118" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="364" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Tavily Search API</text>
+
+      <rect x="430" y="420" width="82" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="471" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Firecrawl</text>
+
+      <rect x="519" y="420" width="148" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="593" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Google Play / iTunes</text>
+
+      <rect x="674" y="420" width="130" height="24" rx="5" fill="#ffedd5" stroke="#fb923c" stroke-width="1"/>
+      <text x="739" y="436" font-size="10" fill="#7c2d12" text-anchor="middle">Wikipedia REST API</text>
+
+      <!-- Arrow: Layer 4 → Layer 5 (left side) -->
+      <line x1="200" y1="370" x2="200" y2="386" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrowA)"/>
+    </svg>
+  </div>
+</div>
+
+<!-- ========== SECTION 5: END-TO-END DATA FLOW ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">5</span>End-to-End Data Flow</div>
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-badge">1</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Submission</div>
+        <div class="timeline-desc"><span class="code">POST /api/run</span> creates a <span class="code">RunRecord</span>, assigns a <span class="code">run_id</span>, and starts a background thread.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">2</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Validation</div>
+        <div class="timeline-desc"><span class="code">input_validator_node</span> sends raw input to Gemini (<span class="code">validation.py</span>). Returns <span class="code">resolved</span> / <span class="code">needs_clarification</span> / <span class="code">rejected</span>. Max 3 clarification rounds; 5-minute timeout per round via <span class="code">threading.Event.wait</span>.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">3</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Cache Check</div>
+        <div class="timeline-desc"><span class="code">core/db.py::find_program_snapshot</span> looks up a prior completed run by normalized program name. Cache hits skip to narration with the stored state.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">4</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Query Generation</div>
+        <div class="timeline-desc"><span class="code">query_generator_node</span> calls Gemini and produces up to 15 <span class="code">SearchQuery</span> objects, each annotated with <span class="code">source_type</span> and <span class="code">field_query_map</span>.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">5</div>
+      <div class="timeline-content">
+        <div class="timeline-title">App Ratings Prefetch</div>
+        <div class="timeline-desc"><span class="code">app_ratings_node</span> calls Google Play Scraper and iTunes Search API directly — no Tavily budget consumed.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">6</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Retrieval</div>
+        <div class="timeline-desc"><span class="code">retrieval_node</span> fans all queries to Tavily (5 results/query), canonicalises URLs, and deduplicates by canonical URL to eliminate redundant scraping.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">7</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Web Enrichment</div>
+        <div class="timeline-desc"><span class="code">web_enrichment_node</span> seeds direct URLs (official T&amp;Cs, Trustpilot, app store pages) plus a Wikipedia summary block — zero Tavily budget spent.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">8</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Firecrawl Scraping</div>
+        <div class="timeline-desc"><span class="code">firecrawl_node</span> selects top 20 URLs via round-robin across source types (<span class="code">select_urls_for_firecrawl</span>) and scrapes each to clean markdown, handling JS-rendered pages and PDFs.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">9</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Ingestion</div>
+        <div class="timeline-desc"><span class="code">ingest_node</span>: raw documents written to <span class="code">raw_store</span> → <span class="code">chunker.py</span> (600-word target, 1 500-word hard cap) → <span class="code">extractor.py</span> (two-phase Gemini extraction) → <span class="code">normalizer.py</span> → assembled <span class="code">FieldReport</span>.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">10</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Adjudication</div>
+        <div class="timeline-desc"><span class="code">adjudication_node</span> detects per-field conflicts and runs the 5-step strategy ladder described in Section 9.2.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">11</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Narration</div>
+        <div class="timeline-desc"><span class="code">narrator_node</span> calls Gemini with the adjudicated <span class="code">FieldReport</span> and produces the 600–900 word analyst brief.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">12</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Persistence &amp; Caching</div>
+        <div class="timeline-desc">Serialised state saved to <span class="code">run_snapshots</span> (keyed by <span class="code">program_name_normalized</span>) and to <span class="code">runs</span> (keyed by <span class="code">run_id</span>) for history reconstruction.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">13</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Conversation</div>
+        <div class="timeline-desc">Frontend polls <span class="code">GET /api/run/{run_id}</span>. Users submit questions via <span class="code">POST /converse</span>; <span class="code">converse.py</span> answers using <span class="code">final_brief</span> + <span class="code">field_report</span> through Groq.</div>
+      </div>
+    </div>
+    <div class="timeline-item">
+      <div class="timeline-badge">14</div>
+      <div class="timeline-content">
+        <div class="timeline-title">Comparison Mode</div>
+        <div class="timeline-desc">Each program runs the full pipeline independently in sequence. <span class="code">generate_comparison_brief</span> + <span class="code">compare_claim_sets</span> produce category-level verdicts and a comparative brief.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== SECTION 6: SYSTEM COMPONENTS TABLE ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">6</span>System Components</div>
+  <table>
+    <thead>
+      <tr><th>Component</th><th>File(s)</th><th>Responsibility</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>REST API</strong></td><td><code>server.py</code></td><td>Run lifecycle endpoints, in-memory <code>RunRecord</code>/STORE, thread-per-run, SSE-free polling model</td></tr>
+      <tr><td><strong>Pipeline orchestration</strong></td><td><code>pipeline/graph.py</code></td><td>LangGraph StateGraph wiring all nodes; step-by-step traced runners</td></tr>
+      <tr><td><strong>Validation</strong></td><td><code>pipeline/stages/validation.py</code></td><td>LLM-backed identity resolution and clarification with up to 3 rounds</td></tr>
+      <tr><td><strong>Query generation</strong></td><td><code>pipeline/stages/query_generator.py</code></td><td>Gemini-driven search query planning with coverage/priority metadata</td></tr>
+      <tr><td><strong>Retrieval</strong></td><td><code>pipeline/stages/retrieval.py</code></td><td>Tavily search, URL canonicalisation and deduplication</td></tr>
+      <tr><td><strong>Web enrichment</strong></td><td><code>pipeline/stages/direct_url_seeder.py</code>, <code>wikipedia_fetcher.py</code></td><td>Zero-cost supplementary evidence (seeded URLs, Wikipedia)</td></tr>
+      <tr><td><strong>App ratings</strong></td><td><code>pipeline/stages/app_ratings_fetcher.py</code></td><td>Direct Play Store / App Store rating lookups</td></tr>
+      <tr><td><strong>Scraping</strong></td><td><code>pipeline/stages/firecrawl_scraper.py</code></td><td>Firecrawl-backed page/PDF content extraction to clean markdown</td></tr>
+      <tr><td><strong>Ingestion</strong></td><td><code>pipeline/nodes/ingest_node.py</code>, <code>raw_store.py</code>, <code>chunker.py</code>, <code>extractor.py</code>, <code>normalizer.py</code></td><td>Raw storage → chunking → schema extraction → normalisation → FieldReport</td></tr>
+      <tr><td><strong>Adjudication</strong></td><td><code>pipeline/adjudication/conflict_adjudicator.py</code>, <code>debate_engine.py</code></td><td>Conflict detection, deterministic merge strategies, adversarial LLM debate</td></tr>
+      <tr><td><strong>Narration</strong></td><td><code>pipeline/stages/narration.py</code></td><td>Brief synthesis from adjudicated field data</td></tr>
+      <tr><td><strong>Comparison</strong></td><td><code>pipeline/stages/comparison.py</code>, <code>comparison_brief.py</code></td><td>Cross-program comparison and brief generation</td></tr>
+      <tr><td><strong>Conversation</strong></td><td><code>pipeline/stages/converse.py</code></td><td>Grounded Q&amp;A over single-program and comparison results</td></tr>
+      <tr><td><strong>Shared contracts</strong></td><td><code>core/schemas.py</code></td><td>Pydantic/TypedDict models, AgentState, schema field paths, volatility classification</td></tr>
+      <tr><td><strong>Persistence</strong></td><td><code>core/db.py</code></td><td>SQLite DDL/migrations, WAL mode, snapshot cache, run history</td></tr>
+      <tr><td><strong>Provider config</strong></td><td><code>core/providers.py</code></td><td>Centralised per-stage LLM/API provider resolution (model, key, base URL)</td></tr>
+      <tr><td><strong>Cost tracking</strong></td><td><code>core/cost_tracker.py</code></td><td>Thread-safe per-run token/cost ledger with provider pricing constants</td></tr>
+      <tr><td><strong>Frontend shell</strong></td><td><code>frontend/app/</code>, <code>frontend/components/</code></td><td>Run submission, live pipeline visualisation, claims/conflict/debate inspection, PDF export</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ========== SECTION 7: TECHNOLOGY STACK ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">7</span>Technology Stack</div>
+  <table>
+    <thead>
+      <tr><th>Layer</th><th>Technology</th><th>Justification</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Backend framework</strong></td><td>FastAPI (<code>fastapi</code>, <code>uvicorn</code>)</td><td>Async-friendly, typed request/response via Pydantic, auto-generated OpenAPI, background-thread model for long-running pipeline runs</td></tr>
+      <tr><td><strong>Orchestration</strong></td><td>LangGraph (<code>langgraph</code>)</td><td>Explicit StateGraph with typed AgentState, conditional routing (clarification vs resolved), reusable node functions</td></tr>
+      <tr><td><strong>Data modeling</strong></td><td>Pydantic v2 (<code>pydantic</code>)</td><td>Runtime validation of every stage's I/O (<code>core/schemas.py</code>), <code>extra="forbid"</code> to catch schema drift early</td></tr>
+      <tr><td><strong>Persistence</strong></td><td>SQLite (<code>stdlib sqlite3</code>)</td><td>Zero-ops embedded store; WAL mode for concurrent API/pipeline thread read/write</td></tr>
+      <tr><td><strong>Primary LLM</strong></td><td>Google Gemini 2.5 Flash</td><td>Used for validation, query generation, extraction, narration, comparison brief — low cost per token, strong JSON-mode following</td></tr>
+      <tr><td><strong>Debate/Converse LLM</strong></td><td>Groq (llama-3.3-70b-versatile)</td><td>Low-latency inference for multi-call adversarial debate (up to 5 calls/conflict) and interactive Q&amp;A</td></tr>
+      <tr><td><strong>Web search</strong></td><td>Tavily</td><td>Purpose-built search API for LLM agents; scored/typed results suited to query-plan-driven retrieval</td></tr>
+      <tr><td><strong>Web scraping</strong></td><td>Firecrawl</td><td>Handles JS-rendered pages and PDF parsing; converts to clean markdown for chunking</td></tr>
+      <tr><td><strong>App store data</strong></td><td>google-play-scraper, iTunes Search API</td><td>Free, structured; avoids spending Tavily/Firecrawl budget on well-known API-accessible data</td></tr>
+      <tr><td><strong>Frontend framework</strong></td><td>Next.js 14 / React 18</td><td>App Router for run/compare/history routes, server + client component split</td></tr>
+      <tr><td><strong>Data fetching</strong></td><td>TanStack Query</td><td>Polling-based live pipeline status without custom WebSocket layer</td></tr>
+      <tr><td><strong>Visualisation</strong></td><td>Recharts, ReactFlow</td><td>Recharts for coverage/cost charts; ReactFlow for live pipeline graph view</td></tr>
+      <tr><td><strong>PDF export</strong></td><td>@react-pdf/renderer</td><td>Client-side PDF generation of single-run and comparison briefs (<code>components/pdf/</code>)</td></tr>
+      <tr><td><strong>Testing</strong></td><td>pytest</td><td>Unit/integration coverage: db, retrieval, validation, query generation, graph orchestration, adjudication (<code>tests/</code>)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ========== SECTION 8: DATABASE & DATA MODELS ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">8</span>Database &amp; Data Models</div>
+
+  <div class="subsection-title">8.1 Persistence Layer</div>
+  <table>
+    <thead>
+      <tr><th>Table</th><th>Purpose</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>run_snapshots</code></td><td>Cache of completed single-program runs, keyed by <code>program_name_normalized</code>, storing full serialised state as <code>program_state_json</code></td></tr>
+      <tr><td><code>runs</code></td><td>Run history/index — <code>run_id</code>, <code>mode</code>, <code>status</code>, <code>data_quality</code>, <code>run_state_json</code> for full-response reconstruction</td></tr>
+      <tr><td><code>program_identities</code></td><td>Resolved <code>ProgramIdentity</code> records</td></tr>
+      <tr><td><code>sources</code></td><td>URL-level metadata: canonical URL, source type, authority score</td></tr>
+      <tr><td><code>pages</code></td><td>Cleaned page text with token counts and sanitiser flags</td></tr>
+      <tr><td><code>chunks</code></td><td>Chunk-level records referencing pages</td></tr>
+      <tr><td><code>claims</code></td><td>Per-field claim records with status, confidence, and volatility</td></tr>
+      <tr><td><code>conflicts</code></td><td>Conflict records with resolution status and judge reasoning</td></tr>
+      <tr><td><code>briefs</code></td><td>Persisted <code>BriefOutput</code> (brief text, cited claims, entailment flag)</td></tr>
+      <tr><td><code>conversations</code></td><td>Q&amp;A history per run</td></tr>
+      <tr><td><code>raw_documents</code></td><td>Post-Firecrawl documents keyed by <code>url_hash</code>, with <code>source_authority</code> and metadata</td></tr>
+      <tr><td><code>normalized_packets</code></td><td>Normalised extraction packets keyed by <code>(identity_hash, source_url, chunk_id)</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <strong>WAL configuration:</strong> <code>connect()</code> opens with <code>PRAGMA journal_mode=WAL</code> and 5s <code>busy_timeout</code>. <code>checkpoint()</code> runs <code>PRAGMA wal_checkpoint(TRUNCATE)</code> on FastAPI shutdown.
+  </div>
+
+  <div class="subsection-title">8.2 Schema Field Categories</div>
+  <div class="card-grid-2" style="gap:12px;">
+    <div class="field-card">
+      <div class="field-card-title">program_basics</div>
+      <div class="field-list">
+        <span class="field-tag">program_name</span><span class="field-tag">brand</span><span class="field-tag">industry</span><span class="field-tag">program_type</span><span class="field-tag">geography</span><span class="field-tag">membership_count</span><span class="field-tag">ownership_or_parent_company</span><span class="field-tag">launch_or_rebrand_history</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">earn_mechanics</div>
+      <div class="field-list">
+        <span class="field-tag">base_earn_rate</span><span class="field-tag">earn_rate_unit</span><span class="field-tag">bonus_categories</span><span class="field-tag">co_brand_card_earn</span><span class="field-tag">partner_earn</span><span class="field-tag">non_transactional_earn</span><span class="field-tag">earning_exclusions</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">burn_mechanics</div>
+      <div class="field-list">
+        <span class="field-tag">redemption_options</span><span class="field-tag">redemption_thresholds</span><span class="field-tag">point_value_cpp</span><span class="field-tag">cash_equivalent_value</span><span class="field-tag">expiry_policy</span><span class="field-tag">blackout_or_capacity_rules</span><span class="field-tag">transfer_options</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">tier_system</div>
+      <div class="field-list">
+        <span class="field-tag">tier_names</span><span class="field-tag">qualification_criteria</span><span class="field-tag">tier_thresholds</span><span class="field-tag">qualification_period</span><span class="field-tag">tier_benefits</span><span class="field-tag">soft_landing_or_status_match</span><span class="field-tag">elite_bonus</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">partnerships</div>
+      <div class="field-list">
+        <span class="field-tag">partner_names</span><span class="field-tag">partnership_type</span><span class="field-tag">details</span><span class="field-tag">partner_category</span><span class="field-tag">earn_details</span><span class="field-tag">burn_details</span><span class="field-tag">transfer_ratios</span><span class="field-tag">discontinued_partners</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">digital_experience</div>
+      <div class="field-list">
+        <span class="field-tag">mobile_app_available</span><span class="field-tag">app_ratings</span><span class="field-tag">app_store_rating</span><span class="field-tag">play_store_rating</span><span class="field-tag">personalization_features</span><span class="field-tag">gamification_features</span><span class="field-tag">digital_wallet_or_card_linking</span><span class="field-tag">app_pain_points</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">member_sentiment</div>
+      <div class="field-list">
+        <span class="field-tag">ratings</span><span class="field-tag">common_praise</span><span class="field-tag">common_complaints</span><span class="field-tag">complaint_frequency</span><span class="field-tag">sources_checked</span><span class="field-tag">review_sources_checked</span><span class="field-tag">forum_sources_checked</span><span class="field-tag">sentiment_summary</span>
+      </div>
+    </div>
+    <div class="field-card">
+      <div class="field-card-title">competitive_position</div>
+      <div class="field-list">
+        <span class="field-tag">key_differentiators</span><span class="field-tag">weaknesses</span><span class="field-tag">closest_competitors</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout callout-amber" style="margin-top:14px;">
+    <strong>High-volatility fields</strong> (require recency-aware adjudication):<br>
+    <code>base_earn_rate</code> &nbsp;·&nbsp; <code>tier_thresholds</code> &nbsp;·&nbsp; <code>redemption_thresholds</code> &nbsp;·&nbsp; <code>point_value_cpp</code> &nbsp;·&nbsp; <code>app_ratings</code> &nbsp;·&nbsp; <code>recent_changes_last_6_months</code>
+  </div>
+</div>
+
+<!-- ========== SECTION 9: AI AGENT PIPELINE ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">9</span>AI Agent Pipeline</div>
+
+  <div class="subsection-title">9.1 Pipeline Flowchart</div>
+  <div class="svg-wrap" style="text-align:center;">
+    <svg viewBox="0 0 720 840" width="100%" style="max-width:680px;display:block;margin:0 auto;" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arr1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#64748b"/>
+        </marker>
+        <marker id="arr-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#dc2626"/>
+        </marker>
+        <marker id="arr-violet" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#7c3aed"/>
+        </marker>
+      </defs>
+
+      <!-- START -->
+      <circle cx="360" cy="28" r="20" fill="#1d4ed8"/>
+      <text x="360" y="33" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">START</text>
+
+      <!-- Arrow START → input_validator -->
+      <line x1="360" y1="48" x2="360" y2="64" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- input_validator -->
+      <rect x="230" y="66" width="260" height="50" rx="8" fill="#eff6ff" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="360" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">input_validator_node</text>
+      <text x="360" y="106" text-anchor="middle" font-size="10.5" fill="#3b82f6">Gemini · Identity Resolution</text>
+
+      <!-- Arrow → decision -->
+      <line x1="360" y1="116" x2="360" y2="132" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- Decision diamond: Resolved? -->
+      <polygon points="360,134 456,165 360,196 264,165" fill="#fefce8" stroke="#d97706" stroke-width="1.5"/>
+      <text x="360" y="161" text-anchor="middle" font-size="11" font-weight="700" fill="#92400e">Resolved?</text>
+      <text x="360" y="177" text-anchor="middle" font-size="9.5" fill="#92400e">(validation status)</text>
+
+      <!-- NO path → reject (right) -->
+      <line x1="456" y1="165" x2="598" y2="165" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arr-red)"/>
+      <text x="520" y="158" text-anchor="middle" font-size="10" fill="#dc2626">rejected</text>
+      <circle cx="618" cy="165" r="16" fill="#dc2626"/>
+      <text x="618" y="162" text-anchor="middle" font-size="8.5" fill="#fff">END</text>
+      <text x="618" y="174" text-anchor="middle" font-size="8.5" fill="#fff">reject</text>
+
+      <!-- Needs-clarification dashed path (left loop) -->
+      <path d="M264,165 Q130,165 130,91 Q130,66 230,91" stroke="#7c3aed" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr-violet)"/>
+      <rect x="40" y="116" width="90" height="20" rx="4" fill="#f5f3ff"/>
+      <text x="85" y="130" text-anchor="middle" font-size="9.5" fill="#7c3aed">clarify (max 3)</text>
+
+      <!-- YES label + arrow down -->
+      <text x="370" y="210" font-size="10" fill="#15803d">YES</text>
+      <line x1="360" y1="196" x2="360" y2="212" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- query_generator -->
+      <rect x="230" y="214" width="260" height="50" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="360" y="236" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">query_generator_node</text>
+      <text x="360" y="254" text-anchor="middle" font-size="10.5" fill="#16a34a">Gemini · Up to 15 queries</text>
+
+      <line x1="360" y1="264" x2="360" y2="280" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- app_ratings -->
+      <rect x="230" y="282" width="260" height="50" rx="8" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="360" y="304" text-anchor="middle" font-size="12" font-weight="700" fill="#581c87">app_ratings_node</text>
+      <text x="360" y="322" text-anchor="middle" font-size="10.5" fill="#a855f7">Google Play &amp; iTunes API</text>
+
+      <line x1="360" y1="332" x2="360" y2="348" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- retrieval -->
+      <rect x="230" y="350" width="260" height="50" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="360" y="372" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">retrieval_node</text>
+      <text x="360" y="390" text-anchor="middle" font-size="10.5" fill="#16a34a">Tavily Search · URL dedup</text>
+
+      <line x1="360" y1="400" x2="360" y2="416" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- web_enrichment -->
+      <rect x="230" y="418" width="260" height="50" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="360" y="440" text-anchor="middle" font-size="12" font-weight="700" fill="#14532d">web_enrichment_node</text>
+      <text x="360" y="458" text-anchor="middle" font-size="10.5" fill="#16a34a">Direct URLs · Wikipedia</text>
+
+      <line x1="360" y1="468" x2="360" y2="484" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- firecrawl_scraper -->
+      <rect x="230" y="486" width="260" height="50" rx="8" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="360" y="508" text-anchor="middle" font-size="12" font-weight="700" fill="#581c87">firecrawl_node</text>
+      <text x="360" y="526" text-anchor="middle" font-size="10.5" fill="#a855f7">Firecrawl · Top 20 URLs</text>
+
+      <line x1="360" y1="536" x2="360" y2="552" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- ingest -->
+      <rect x="230" y="554" width="260" height="50" rx="8" fill="#fdf4ff" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="360" y="576" text-anchor="middle" font-size="12" font-weight="700" fill="#581c87">ingest_node</text>
+      <text x="360" y="594" text-anchor="middle" font-size="10.5" fill="#a855f7">Chunk → Extract → Normalize</text>
+
+      <line x1="360" y1="604" x2="360" y2="620" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- adjudication -->
+      <rect x="230" y="622" width="260" height="50" rx="8" fill="#fff7ed" stroke="#f97316" stroke-width="1.5"/>
+      <text x="360" y="644" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">adjudication_node</text>
+      <text x="360" y="662" text-anchor="middle" font-size="10.5" fill="#f97316">Conflict Detection &amp; Debate</text>
+
+      <line x1="360" y1="672" x2="360" y2="688" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- narration -->
+      <rect x="230" y="690" width="260" height="50" rx="8" fill="#fff7ed" stroke="#f97316" stroke-width="1.5"/>
+      <text x="360" y="712" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">narrator_node</text>
+      <text x="360" y="730" text-anchor="middle" font-size="10.5" fill="#f97316">Gemini · 600–900 word brief</text>
+
+      <line x1="360" y1="740" x2="360" y2="756" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr1)"/>
+
+      <!-- END -->
+      <circle cx="360" cy="778" r="20" fill="#1d4ed8"/>
+      <text x="360" y="783" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">END</text>
+    </svg>
+  </div>
+
+  <div class="subsection-title">9.2 Conflict Resolution Decision Tree</div>
+  <div class="svg-wrap">
+    <svg viewBox="0 0 720 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="dt-arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#475569"/>
+        </marker>
+        <marker id="dt-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#15803d"/>
+        </marker>
+        <marker id="dt-red2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#dc2626"/>
+        </marker>
+        <marker id="dt-teal" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#0d9488"/>
+        </marker>
+        <marker id="dt-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/>
+        </marker>
+      </defs>
+
+      <!-- Title -->
+      <text x="360" y="22" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">5-Step Conflict Resolution Ladder</text>
+
+      <!-- ===== STEP 1 ===== -->
+      <text x="28" y="67" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">①</text>
+      <polygon points="200,50 290,65 200,80 110,65" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="200" y="69" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Identical values?</text>
+      <!-- YES → right -->
+      <line x1="290" y1="65" x2="358" y2="65" stroke="#15803d" stroke-width="1.5" marker-end="url(#dt-green)"/>
+      <text x="320" y="59" text-anchor="middle" font-size="9.5" fill="#15803d">YES</text>
+      <rect x="360" y="50" width="190" height="30" rx="5" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+      <text x="455" y="69" text-anchor="middle" font-size="10" fill="#14532d">Auto-resolve (no LLM call)</text>
+      <!-- NO → down -->
+      <line x1="200" y1="80" x2="200" y2="128" stroke="#475569" stroke-width="1.5" marker-end="url(#dt-arr)"/>
+      <text x="210" y="108" font-size="9.5" fill="#475569">NO</text>
+
+      <!-- ===== STEP 2 ===== -->
+      <text x="28" y="150" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">②</text>
+      <polygon points="200,130 290,145 200,160 110,145" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="200" y="149" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Confidence gap</text>
+      <text x="200" y="162" text-anchor="middle" font-size="9.5" fill="#14532d">&gt; 0.20?</text>
+      <!-- YES → right -->
+      <line x1="290" y1="145" x2="358" y2="145" stroke="#15803d" stroke-width="1.5" marker-end="url(#dt-green)"/>
+      <text x="320" y="139" text-anchor="middle" font-size="9.5" fill="#15803d">YES</text>
+      <rect x="360" y="130" width="190" height="30" rx="5" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+      <text x="455" y="149" text-anchor="middle" font-size="10" fill="#14532d">Auto-resolve to stronger claim</text>
+      <!-- NO → down -->
+      <line x1="200" y1="163" x2="200" y2="208" stroke="#475569" stroke-width="1.5" marker-end="url(#dt-arr)"/>
+      <text x="210" y="188" font-size="9.5" fill="#475569">NO</text>
+
+      <!-- ===== STEP 3 ===== -->
+      <text x="28" y="232" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">③</text>
+      <polygon points="200,210 290,228 200,246 110,228" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="200" y="224" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Field-type strategy</text>
+      <text x="200" y="238" text-anchor="middle" font-size="9.5" fill="#14532d">match?</text>
+      <!-- YES → right -->
+      <line x1="290" y1="228" x2="358" y2="228" stroke="#d97706" stroke-width="1.5" marker-end="url(#dt-arr)"/>
+      <text x="320" y="222" text-anchor="middle" font-size="9.5" fill="#d97706">YES</text>
+      <rect x="360" y="210" width="190" height="36" rx="5" fill="#fffbeb" stroke="#d97706" stroke-width="1"/>
+      <text x="455" y="225" text-anchor="middle" font-size="9.5" fill="#92400e">Deterministic merge:</text>
+      <text x="455" y="239" text-anchor="middle" font-size="9" fill="#92400e">range / union / recency / majority_vote</text>
+      <!-- NO → down -->
+      <line x1="200" y1="246" x2="200" y2="291" stroke="#475569" stroke-width="1.5" marker-end="url(#dt-arr)"/>
+      <text x="210" y="272" font-size="9.5" fill="#475569">NO</text>
+
+      <!-- ===== STEP 4 ===== -->
+      <text x="28" y="316" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">④</text>
+      <polygon points="200,293 290,308 200,323 110,308" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="200" y="312" text-anchor="middle" font-size="10.5" font-weight="700" fill="#14532d">Values</text>
+      <text x="200" y="325" text-anchor="middle" font-size="9.5" fill="#14532d">complementary?</text>
+      <!-- YES → right -->
+      <line x1="290" y1="308" x2="358" y2="308" stroke="#0d9488" stroke-width="1.5" marker-end="url(#dt-teal)"/>
+      <text x="320" y="302" text-anchor="middle" font-size="9.5" fill="#0d9488">YES</text>
+      <rect x="360" y="293" width="190" height="30" rx="5" fill="#f0fdfa" stroke="#0d9488" stroke-width="1"/>
+      <text x="455" y="312" text-anchor="middle" font-size="10" fill="#0f766e">Synthesize MERGE (1 Groq call)</text>
+      <!-- NO → down -->
+      <line x1="200" y1="325" x2="200" y2="360" stroke="#475569" stroke-width="1.5" marker-end="url(#dt-arr)"/>
+      <text x="210" y="345" font-size="9.5" fill="#475569">NO</text>
+
+      <!-- ===== STEP 5: Adversarial Debate ===== -->
+      <text x="28" y="395" text-anchor="middle" font-size="14" font-weight="700" fill="#1d4ed8">⑤</text>
+      <rect x="100" y="362" width="200" height="70" rx="8" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1.5"/>
+      <text x="200" y="382" text-anchor="middle" font-size="12" font-weight="700" fill="#1d4ed8">Adversarial Debate</text>
+      <text x="200" y="398" text-anchor="middle" font-size="9.5" fill="#1e3a8a">Advocate A vs Advocate B</text>
+      <text x="200" y="411" text-anchor="middle" font-size="9.5" fill="#1e3a8a">temperature 0.0 · Similarity gate (cosine &lt; 0.80)</text>
+      <text x="200" y="424" text-anchor="middle" font-size="9.5" fill="#1e3a8a">Judge · temperature 0.1</text>
+
+      <!-- Verdict A/B/MERGE → right -->
+      <line x1="300" y1="380" x2="358" y2="380" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#dt-blue)"/>
+      <rect x="360" y="365" width="160" height="30" rx="5" fill="#eff6ff" stroke="#1d4ed8" stroke-width="1"/>
+      <text x="440" y="384" text-anchor="middle" font-size="10" fill="#1d4ed8">Verdict: A / B / MERGE</text>
+      <line x1="440" y1="395" x2="440" y2="413" stroke="#15803d" stroke-width="1.5" marker-end="url(#dt-green)"/>
+      <rect x="370" y="415" width="140" height="26" rx="5" fill="#f0fdf4" stroke="#16a34a" stroke-width="1"/>
+      <text x="440" y="432" text-anchor="middle" font-size="10" font-weight="700" fill="#15803d">Resolved</text>
+
+      <!-- Verdict FLAG → down → human_review_queue -->
+      <line x1="300" y1="415" x2="358" y2="440" stroke="#dc2626" stroke-width="1.5" marker-end="url(#dt-red2)"/>
+      <rect x="360" y="430" width="140" height="26" rx="5" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+      <text x="430" y="447" text-anchor="middle" font-size="10" fill="#dc2626">Verdict: FLAG</text>
+      <line x1="430" y1="456" x2="430" y2="474" stroke="#dc2626" stroke-width="1.5" marker-end="url(#dt-red2)"/>
+      <rect x="355" y="476" width="150" height="26" rx="5" fill="#fef2f2" stroke="#dc2626" stroke-width="1"/>
+      <text x="430" y="493" text-anchor="middle" font-size="10" font-weight="700" fill="#b91c1c">human_review_queue</text>
+
+      <!-- Bottom actor labels -->
+      <text x="130" y="545" text-anchor="middle" font-size="10.5" fill="#475569">Advocate A</text>
+      <text x="200" y="545" text-anchor="middle" font-size="10.5" fill="#1d4ed8" font-weight="600">Judge</text>
+      <text x="270" y="545" text-anchor="middle" font-size="10.5" fill="#475569">Advocate B</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ========== SECTION 10: EXTERNAL INTEGRATIONS ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">10</span>External Integrations</div>
+  <div class="card-grid-2">
+    <div class="int-card" style="border-top: 3px solid #1d4ed8;">
+      <div class="int-card-title" style="color:#1d4ed8;">Google Gemini 2.5 Flash</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">validation.py</span>, <span class="code">query_generator.py</span>, <span class="code">extractor.py</span>, <span class="code">narration.py</span>, <span class="code">comparison_brief.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">JSON-mode structured generation for identity resolution, query planning, field extraction, and narrative synthesis</div>
+      <div class="int-label">Config</div>
+      <div class="int-value"><span class="code">GEMINI_API_KEY</span> / <span class="code">GEMINI_API_BASE</span> (overridable per stage: <span class="code">INPUT_VERIFIER_*</span>, <span class="code">QUERY_GENERATOR_*</span>, <span class="code">EXTRACTION_*</span>, <span class="code">NARRATION_*</span>)</div>
+    </div>
+    <div class="int-card" style="border-top: 3px solid #7c3aed;">
+      <div class="int-card-title" style="color:#7c3aed;">Groq (llama-3.3-70b-versatile)</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">debate_engine.py</span>, <span class="code">converse.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">Low-latency multi-call adversarial debate; grounded Q&amp;A with answers traceable to extracted evidence</div>
+      <div class="int-label">Config</div>
+      <div class="int-value"><span class="code">GROQ_API_KEYS</span> (round-robin pool); <span class="code">DEBATE_API_KEY</span>; <span class="code">CONVERSE_API_KEY</span> — 401 auto-eviction from pool</div>
+    </div>
+    <div class="int-card" style="border-top: 3px solid #0d9488;">
+      <div class="int-card-title" style="color:#0d9488;">Tavily Search API</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">retrieval.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">Query-driven candidate URL discovery; 5 results per query with scored, typed results suited to query-plan-driven retrieval</div>
+      <div class="int-label">Config</div>
+      <div class="int-value"><span class="code">TAVILY_API_KEY</span> / <span class="code">TAVILY_API_BASE</span></div>
+    </div>
+    <div class="int-card" style="border-top: 3px solid #ea580c;">
+      <div class="int-card-title" style="color:#ea580c;">Firecrawl</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">firecrawl_scraper.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">Page and PDF scraping to clean markdown, handling JS-rendered content and complex document layouts</div>
+      <div class="int-label">Config</div>
+      <div class="int-value"><span class="code">FIRECRAWL_API_KEY</span> / <span class="code">FIRECRAWL_API_BASE</span></div>
+    </div>
+    <div class="int-card" style="border-top: 3px solid #16a34a;">
+      <div class="int-card-title" style="color:#16a34a;">Google Play Scraper + iTunes Search API</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">app_ratings_fetcher.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">Direct app rating lookups, bypassing the search and scrape budget entirely for well-known structured data</div>
+      <div class="int-label">Config</div>
+      <div class="int-value">No API key required</div>
+    </div>
+    <div class="int-card" style="border-top: 3px solid #64748b;">
+      <div class="int-card-title" style="color:#64748b;">Wikipedia REST API</div>
+      <div class="int-label">Used by</div>
+      <div class="int-value"><span class="code">wikipedia_fetcher.py</span></div>
+      <div class="int-label">Purpose</div>
+      <div class="int-value">Free company/brand summary injected as a synthetic evidence block with zero search/scrape budget consumption</div>
+      <div class="int-label">Config</div>
+      <div class="int-value">No API key required</div>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:16px;">
+    <strong>Note:</strong> No vector database in the current implementation — chunk selection uses heuristic scoring (<span class="code">extractor.py</span>). <span class="code">ChunkRef.embedding_hash</span> exists in the schema/DDL as a forward-compatible field for future semantic retrieval.
+  </div>
+</div>
+
+<!-- ========== SECTION 11: SEQUENCE DIAGRAM ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">11</span>Sequence Diagram</div>
+  <div class="svg-wrap">
+    <svg viewBox="0 0 820 618" width="100%" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="seq-arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#1d4ed8"/>
+        </marker>
+        <marker id="seq-ret" markerWidth="8" markerHeight="8" refX="2" refY="3" orient="auto-start-reverse">
+          <path d="M8,0 L8,6 L0,3 z" fill="#64748b"/>
+        </marker>
+      </defs>
+
+      <!-- Actor boxes -->
+      <!-- User x=50, Frontend x=155, FastAPI x=270, LangGraph x=390, Gemini x=490, Tavily x=590, Firecrawl x=680, SQLite x=780 -->
+      <rect x="10"  y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="50"  y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">User</text>
+      <rect x="115" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="155" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">Frontend</text>
+      <rect x="230" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="270" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">FastAPI</text>
+      <rect x="350" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="390" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">LangGraph</text>
+      <rect x="450" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="490" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">Gemini</text>
+      <rect x="550" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="590" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">Tavily</text>
+      <rect x="640" y="10" width="80" height="28" rx="4" fill="#1d4ed8"/><text x="680" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">Firecrawl</text>
+      <rect x="740" y="10" width="74" height="28" rx="4" fill="#1d4ed8"/><text x="777" y="28" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">SQLite</text>
+
+      <!-- Lifelines -->
+      <line x1="50"  y1="38" x2="50"  y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="155" y1="38" x2="155" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="270" y1="38" x2="270" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="390" y1="38" x2="390" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="490" y1="38" x2="490" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="590" y1="38" x2="590" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="680" y1="38" x2="680" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+      <line x1="777" y1="38" x2="777" y2="610" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+
+      <!-- Messages -->
+      <!-- y=80: User→Frontend -->
+      <line x1="52" y1="78" x2="152" y2="78" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="100" y="74" text-anchor="middle" font-size="9.5" fill="#1d4ed8">Enter program name</text>
+
+      <!-- y=105: Frontend→FastAPI -->
+      <line x1="157" y1="103" x2="268" y2="103" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="210" y="99" text-anchor="middle" font-size="9.5" fill="#1d4ed8">POST /api/run</text>
+
+      <!-- y=128: FastAPI→LangGraph -->
+      <line x1="272" y1="126" x2="388" y2="126" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="328" y="122" text-anchor="middle" font-size="9.5" fill="#1d4ed8">start pipeline thread</text>
+
+      <!-- y=151: LangGraph→Gemini -->
+      <line x1="392" y1="149" x2="488" y2="149" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="438" y="145" text-anchor="middle" font-size="9.5" fill="#1d4ed8">validate identity</text>
+
+      <!-- y=172: Gemini→LangGraph -->
+      <line x1="488" y1="170" x2="392" y2="170" stroke="#64748b" stroke-width="1.5" marker-end="url(#seq-ret)"/>
+      <text x="438" y="166" text-anchor="middle" font-size="9.5" fill="#64748b">ValidationResult</text>
+
+      <!-- Alt box: needs_clarification -->
+      <rect x="60" y="182" width="720" height="52" rx="4" fill="none" stroke="#d97706" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="70" y="196" font-size="9.5" fill="#d97706" font-style="italic">[needs_clarification]</text>
+      <line x1="392" y1="202" x2="156" y2="202" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="275" y="198" text-anchor="middle" font-size="9" fill="#1d4ed8">status: clarification_needed</text>
+      <line x1="157" y1="220" x2="268" y2="220" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="210" y="216" text-anchor="middle" font-size="9" fill="#1d4ed8">POST /clarify {answer}</text>
+
+      <!-- Alt box: cache hit -->
+      <rect x="60" y="238" width="720" height="60" rx="4" fill="none" stroke="#16a34a" stroke-width="1" stroke-dasharray="5,3"/>
+      <text x="70" y="252" font-size="9.5" fill="#16a34a" font-style="italic">[cache hit]</text>
+      <line x1="392" y1="260" x2="776" y2="260" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="583" y="256" text-anchor="middle" font-size="9" fill="#1d4ed8">find_program_snapshot()</text>
+      <line x1="776" y1="278" x2="392" y2="278" stroke="#64748b" stroke-width="1.5" marker-end="url(#seq-ret)"/>
+      <text x="583" y="274" text-anchor="middle" font-size="9" fill="#64748b">cached state → cache_hit_pending</text>
+
+      <!-- Fresh run label -->
+      <text x="70" y="308" font-size="9.5" fill="#1d4ed8" font-style="italic" font-weight="600">[fresh run]</text>
+
+      <!-- generate queries -->
+      <line x1="392" y1="318" x2="488" y2="318" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="438" y="314" text-anchor="middle" font-size="9" fill="#1d4ed8">generate queries</text>
+
+      <!-- retrieval per query -->
+      <line x1="392" y1="340" x2="588" y2="340" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="490" y="336" text-anchor="middle" font-size="9" fill="#1d4ed8">retrieval (per query)</text>
+
+      <!-- scrape batch -->
+      <line x1="392" y1="360" x2="678" y2="360" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="535" y="356" text-anchor="middle" font-size="9" fill="#1d4ed8">scrape batch</text>
+
+      <!-- extract per chunk -->
+      <line x1="392" y1="382" x2="488" y2="382" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="438" y="378" text-anchor="middle" font-size="9" fill="#1d4ed8">extract per chunk</text>
+
+      <!-- adjudication + debate -->
+      <path d="M392,404 Q350,404 350,420 Q350,436 392,436" stroke="#7c3aed" stroke-width="1.5" fill="none" marker-end="url(#seq-arr)"/>
+      <text x="290" y="422" text-anchor="middle" font-size="9" fill="#7c3aed">adjudication + debate (Groq)</text>
+
+      <!-- narration -->
+      <line x1="392" y1="455" x2="488" y2="455" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="438" y="451" text-anchor="middle" font-size="9" fill="#1d4ed8">narration</text>
+
+      <!-- save snapshot -->
+      <line x1="392" y1="475" x2="776" y2="475" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="583" y="471" text-anchor="middle" font-size="9" fill="#1d4ed8">save_program_snapshot</text>
+
+      <!-- poll -->
+      <line x1="157" y1="495" x2="268" y2="495" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="210" y="491" text-anchor="middle" font-size="9" fill="#1d4ed8">GET /api/run/{id} (poll)</text>
+
+      <!-- response -->
+      <line x1="268" y1="515" x2="157" y2="515" stroke="#64748b" stroke-width="1.5" marker-end="url(#seq-ret)"/>
+      <text x="210" y="511" text-anchor="middle" font-size="9" fill="#64748b">status=done, brief, claims</text>
+
+      <!-- converse -->
+      <line x1="52" y1="538" x2="152" y2="538" stroke="#1d4ed8" stroke-width="1.5" marker-end="url(#seq-arr)"/>
+      <text x="100" y="534" text-anchor="middle" font-size="9" fill="#1d4ed8">POST /converse</text>
+
+      <!-- answer from field_report -->
+      <path d="M390,558 Q350,558 350,574 Q350,590 390,590" stroke="#7c3aed" stroke-width="1.5" fill="none" marker-end="url(#seq-arr)"/>
+      <text x="270" y="576" text-anchor="middle" font-size="9" fill="#7c3aed">answer from field_report (Groq)</text>
+
+      <!-- ConverseAnswer -->
+      <line x1="153" y1="607" x2="52" y2="607" stroke="#64748b" stroke-width="1.5" marker-end="url(#seq-ret)"/>
+      <text x="100" y="603" text-anchor="middle" font-size="9" fill="#64748b">ConverseAnswer</text>
+    </svg>
+  </div>
+</div>
+
+<!-- ========== SECTION 12: DESIGN DECISIONS ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">12</span>Design Decisions &amp; Trade-offs</div>
+  <table>
+    <thead>
+      <tr><th>Decision</th><th>Rationale</th><th>Trade-off</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Thread-per-run (no Celery/RQ)</strong></td>
+        <td>Eliminates broker dependency, simplifies dev/ops for single-node deployment</td>
+        <td>STORE lives in memory; horizontal scaling requires externalising state to Redis</td>
+      </tr>
+      <tr>
+        <td><strong>LangGraph StateGraph</strong></td>
+        <td>Typed AgentState, explicit conditional routing, and composable node functions make the pipeline auditable</td>
+        <td>Heavier abstraction than a simple function chain; adds LangGraph dependency</td>
+      </tr>
+      <tr>
+        <td><strong>SQLite WAL (no Postgres)</strong></td>
+        <td>Zero-ops embedded persistence; WAL mode handles concurrent API + pipeline thread reads/writes safely</td>
+        <td>Single-file; not suitable for multi-node; no full-text search index</td>
+      </tr>
+      <tr>
+        <td><strong>Gemini for extraction, Groq for debate</strong></td>
+        <td>Gemini's JSON mode and low cost/token make it ideal for high-volume structured extraction; Groq's low latency suits multi-call debate loops</td>
+        <td>Two provider dependencies; API key pool management adds code complexity</td>
+      </tr>
+      <tr>
+        <td><strong>Cheapest-sufficient adjudication ladder</strong></td>
+        <td>Avoids LLM calls for conflicts resolvable by deterministic rules (identical values, confidence gap, field-type strategy)</td>
+        <td>Ladder logic is bespoke; adding new field types requires updating strategy dispatch</td>
+      </tr>
+      <tr>
+        <td><strong>Heuristic chunk selection (no embeddings)</strong></td>
+        <td>Avoids embedding API dependency and vector DB; field_query_map from query planning guides chunk relevance scoring</td>
+        <td><code>ChunkRef.embedding_hash</code> is reserved; switch to semantic retrieval requires migration effort</td>
+      </tr>
+      <tr>
+        <td><strong>Polling over WebSocket/SSE</strong></td>
+        <td>Simpler server implementation; TanStack Query handles retry/backoff; no persistent connection state</td>
+        <td>Higher request volume; latency of status updates bounded by poll interval</td>
+      </tr>
+      <tr>
+        <td><strong>Snapshot cache by normalised name</strong></td>
+        <td>Repeated queries for the same program reuse the completed run, saving API cost</td>
+        <td>Cache must be explicitly invalidated when fresh data is needed; staleness not auto-detected</td>
+      </tr>
+      <tr>
+        <td><strong>No auth layer on API</strong></td>
+        <td>Simplifies single-user local deployment</td>
+        <td>Not deployable in multi-user or public contexts without adding authentication/authorisation middleware</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ========== SECTION 13: SCALABILITY, RELIABILITY, SECURITY & OBSERVABILITY ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">13</span>Scalability, Reliability, Security &amp; Observability</div>
+  <div class="obs-grid">
+    <div class="obs-card" style="background:#eff6ff;border-color:#3b82f6;">
+      <div class="obs-card-title" style="color:#1d4ed8;">Scalability</div>
+      <ul>
+        <li>Single-process / single-node; <span class="code">STORE</span> is an in-memory dict guarded by <span class="code">STORE_LOCK</span></li>
+        <li>Thread-per-run model; compare-mode runs programs sequentially</li>
+        <li>No external broker or queue in current implementation</li>
+        <li><strong>Horizontal scaling path:</strong> externalise STORE to Redis, move run execution to Celery/RQ</li>
+      </ul>
+    </div>
+    <div class="obs-card" style="background:#f0fdf4;border-color:#16a34a;">
+      <div class="obs-card-title" style="color:#15803d;">Reliability</div>
+      <ul>
+        <li><span class="code">checkpoint()</span> runs <span class="code">PRAGMA wal_checkpoint(TRUNCATE)</span> on FastAPI shutdown</li>
+        <li><span class="code">server.sh</span> integrity check + <span class="code">db_corrupted_backup/</span> on corrupt DB detection</li>
+        <li>Per-program result caching via <span class="code">run_snapshots</span> survives restarts</li>
+        <li>All nodes catch exceptions → <span class="code">PipelineError(stage, message)</span> → UI error state</li>
+        <li>Clarification and cache waits bounded to 300 s via <span class="code">threading.Event.wait</span></li>
+      </ul>
+    </div>
+    <div class="obs-card" style="background:#fffbeb;border-color:#d97706;">
+      <div class="obs-card-title" style="color:#b45309;">Security</div>
+      <ul>
+        <li>API keys loaded from <span class="code">.env</span> via <span class="code">python-dotenv</span>; <span class="code">reject_placeholders=True</span> rejects <span class="code">"your_..."</span> values at startup</li>
+        <li>CORS restricted to <span class="code">localhost:3000/3001</span> and <span class="code">127.0.0.1</span> equivalents</li>
+        <li>No authentication layer (gap before non-local deployment)</li>
+        <li>Extraction and debate prompts include "hallucination fence" grounding instructions</li>
+      </ul>
+    </div>
+    <div class="obs-card" style="background:#f5f3ff;border-color:#7c3aed;">
+      <div class="obs-card-title" style="color:#6d28d9;">Observability</div>
+      <ul>
+        <li><span class="code">CostLedger</span>: per-provider/stage call counts + token usage → USD via pricing constants</li>
+        <li><span class="code">UI_STAGES</span> tracked per run, surfaced to frontend via polling response</li>
+        <li><span class="code">logs/backend.log</span>, <span class="code">logs/frontend.log</span>, <span class="code">logs/debate_debug.log</span> (<span class="code">FileHandler</span> in <span class="code">debate_engine.py</span>)</li>
+        <li>Per-stage cost breakdown visible in the frontend cost panel</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ========== SECTION 14: ERROR HANDLING ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">14</span>Error Handling &amp; Retry Strategy</div>
+  <ul style="list-style:none;padding-left:0;">
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #1d4ed8;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Node-level isolation</strong> — every graph node catches exceptions internally and writes a <span class="code">PipelineError</span> delta. The background thread continues without crashing; the UI reflects an error state for that stage.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #d97706;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Firecrawl partial failure</strong> — the scraper continues if individual URL fetches fail; the node only raises if <em>zero</em> URLs succeed overall.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #7c3aed;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Groq rate limiting</strong> — <span class="code">debate_engine.py::call_groq</span> retries up to <span class="code">pool_size × 2</span> attempts, rotates keys on HTTP 429, and permanently evicts keys on HTTP 401 via <span class="code">_remove_client_from_pool</span>.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #0d9488;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Judge output parsing</strong> — <span class="code">parse_judge_output</span> tolerates malformed or partial JSON from the debate judge, falling back to <span class="code">FLAG_FALLBACK_REASONING</span> to ensure the conflict always has a recorded outcome.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #16a34a;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Non-fatal enrichment failures</strong> — <span class="code">web_enrichment_node</span> treats individual URL-seeding and Wikipedia fetch errors as non-fatal, logging warnings and continuing with available evidence.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #dc2626;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>User-triggered cancellation</strong> — <span class="code">record.stop_event</span> is checked before every stage transition. In-flight stages are marked as errors and <span class="code">run_status</span> is set to <span class="code">cancelled</span>.
+    </li>
+    <li style="padding:10px 12px;background:#f8fafc;border-left:3px solid #475569;margin-bottom:10px;border-radius:0 6px 6px 0;">
+      <strong>Debate engine fallback</strong> — if the debate engine raises an unhandled exception, the conflict is converted to a FLAG with <span class="code">deciding_factor: "unresolvable"</span> and confidence 0.40 rather than failing the run.
+    </li>
+  </ul>
+</div>
+
+<!-- ========== SECTION 15: FUTURE ENHANCEMENTS ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">15</span>Future Enhancements</div>
+  <div style="display:flex;flex-direction:column;gap:12px;margin-top:16px;">
+    <div class="roadmap-card">
+      <div class="roadmap-num">1</div>
+      <div>
+        <div class="roadmap-title">Embedding-based Retrieval</div>
+        <div class="roadmap-desc"><span class="code">ChunkRef.embedding_hash</span> and the <span class="code">chunks</span> table schema are already forward-compatible. Moving from heuristic scoring to semantic vector search would improve extraction recall on long, multi-topic pages.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">2</div>
+      <div>
+        <div class="roadmap-title">Multi-instance Scaling</div>
+        <div class="roadmap-desc">Externalise <span class="code">STORE</span> to Redis and move run execution to Celery or RQ to support parallel runs across multiple server instances with shared state.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">3</div>
+      <div>
+        <div class="roadmap-title">Authentication &amp; Authorisation</div>
+        <div class="roadmap-desc">The API has no auth layer. Required before any non-local deployment. Candidate approach: OAuth2/OIDC middleware on FastAPI with per-user run isolation.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">4</div>
+      <div>
+        <div class="roadmap-title">Streaming Updates via WebSocket / SSE</div>
+        <div class="roadmap-desc">Replace the current polling model (<span class="code">GET /api/run/{id}</span>) with a WebSocket or Server-Sent Events channel for lower-latency stage-progress updates and reduced request volume.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">5</div>
+      <div>
+        <div class="roadmap-title">Crash-resumable Runs</div>
+        <div class="roadmap-desc">Persist <span class="code">AgentState</span> to the database after each completed node (not only on final completion) to enable mid-run restart recovery after a server crash.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">6</div>
+      <div>
+        <div class="roadmap-title">verification.py Consolidation</div>
+        <div class="roadmap-desc">The standalone confidence-scoring module is a candidate for merge with <span class="code">conflict_adjudicator.py</span> to reduce the number of conceptually overlapping scoring paths.</div>
+      </div>
+    </div>
+    <div class="roadmap-card">
+      <div class="roadmap-num">7</div>
+      <div>
+        <div class="roadmap-title">extraction.py Retirement</div>
+        <div class="roadmap-desc">The legacy <span class="code">extraction.py</span> is superseded by <span class="code">extractor.py</span> as the active runtime path. The older module should be formally deprecated or removed to avoid confusion about which path is canonical.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ========== SECTION 16: CONCLUSION ========== -->
+<div class="section">
+  <div class="section-title"><span class="section-number">16</span>Conclusion</div>
+  <div class="callout" style="padding:24px 28px;margin-top:16px;font-size:14px;line-height:1.75;">
+    <p style="color:#1e3a8a;margin-bottom:12px;">
+      Kobie demonstrates that a rigorous, source-grounded intelligence pipeline can be built from commodity LLM APIs and open-source tooling without a vector database or bespoke model. Its design is governed by a single architectural constraint: <strong>"Never hallucinate a fact."</strong>
+    </p>
+    <p style="color:#1e3a8a;margin-bottom:12px;">
+      Every extracted value carries a <span class="code">source_url</span>. Conflicts between sources are resolved through an auditable ladder of deterministic strategies — using the cheapest sufficient method — before falling back to metadata-only adversarial debate. The narrative brief and the grounded Q&amp;A interface are both constrained to adjudicated evidence only; the LLM is used as a synthesiser and writer, not as a knowledge store.
+    </p>
+    <p style="color:#1e3a8a;margin-bottom:0;">
+      The result is an agent whose outputs can be independently verified: every claim traces back to a retrieved page, and every conflict resolution decision is recorded with its strategy, judge reasoning, and confidence score. This auditability is the architectural property that distinguishes Kobie from a simple chatbot wrapper over a search API.
+    </p>
+  </div>
+
+  <div style="margin-top:32px;padding-top:24px;border-top:1px solid #e2e8f0;display:flex;gap:16px;flex-wrap:wrap;">
+    <span class="pill">FastAPI</span>
+    <span class="pill">LangGraph</span>
+    <span class="pill">Gemini 2.5 Flash</span>
+    <span class="pill">Groq llama-3.3-70b</span>
+    <span class="pill">Tavily</span>
+    <span class="pill">Firecrawl</span>
+    <span class="pill">SQLite WAL</span>
+    <span class="pill">Next.js 14</span>
+    <span class="pill">TanStack Query</span>
+    <span class="pill">Pydantic v2</span>
+  </div>
+
+  <div style="margin-top:28px;text-align:center;color:#94a3b8;font-size:12px;padding-bottom:16px;">
+    Kobie Architecture &amp; Design Document &nbsp;·&nbsp; Version 1.0 &nbsp;·&nbsp; Autonomous Competitive Intelligence Agent for Loyalty Programs
+  </div>
+</div>
+
+</div><!-- end .page -->
+</body>
+</html>
+</html>
