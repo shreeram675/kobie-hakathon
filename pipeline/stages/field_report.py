@@ -8,6 +8,7 @@ reported as ambiguous (unclear evidence seen) or not_found (searched, absent).
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from core.schemas import ExtractedField, FieldReport, FieldReportEntry, NormalizedObjectPacket
@@ -103,4 +104,7 @@ def _build_entry(field_path: str, packets: list[NormalizedObjectPacket]) -> Fiel
 
 
 def _value_key(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=True, default=str)
+    """Grouping key: case/trademark-insensitive so "SkyMiles" and "skymiles™"
+    corroborate each other instead of splitting into rival value groups."""
+    serialized = json.dumps(value, sort_keys=True, ensure_ascii=True, default=str)
+    return re.sub(r"[™®©]", "", serialized.lower())

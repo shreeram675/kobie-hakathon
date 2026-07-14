@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 import threading
 from datetime import datetime, timezone
 from typing import Any
@@ -29,9 +28,12 @@ logger = logging.getLogger("kobie")
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel as _PydanticBase
 
 from core import db as _db
+from core.export import build_export
+from core.slim import slim_run_state
 
 from core.schemas import (
     Claim,
@@ -48,7 +50,9 @@ from core.schemas import (
 from pipeline.graph import (
     input_validator_node,
     query_generator_node,
+    app_ratings_node,
     retrieval_node,
+    web_enrichment_node,
     firecrawl_node,
     ingest_node,
     adjudication_node,
@@ -62,7 +66,10 @@ from core import cost_tracker
 app = FastAPI(title="Kobie API")
 
 # ── Persistent DB (cache + history) ───────────────────────────────────────────
-_db_conn: sqlite3.Connection = _db.connect()
+# One connection per thread: request handlers run in FastAPI's threadpool and
+# every pipeline runs in its own thread, and sqlite3 connections must not be
+# shared across threads (previous shared-connection setup risked corruption).
+_db_conn = _db.ThreadLocalConnection()
 _db.migrate(_db_conn)
 
 
@@ -413,9 +420,33 @@ def _restore_single_from_cache(record: RunRecord, snapshot: dict) -> None:
         }
     ]
     cached["comparison_conversation"] = []
+
+    # Hydrate the live state too: endpoints like /converse read record.state,
+    # which stays at its initial empty values when no pipeline thread runs.
+    final_brief: BriefOutput | None = None
+    field_report: FieldReport | None = None
+    try:
+        if program_state.get("final_brief"):
+            final_brief = BriefOutput.model_validate(program_state["final_brief"])
+    except Exception:
+        logger.exception("[%s] could not hydrate final_brief from cache snapshot", record.run_id)
+    try:
+        if isinstance(program_state.get("field_report"), dict):
+            field_report = FieldReport.model_validate(program_state["field_report"])
+    except Exception:
+        logger.exception("[%s] could not hydrate field_report from cache snapshot", record.run_id)
+
     with record.lock:
         record.cached_response = cached
         record.run_status = "done"
+        if final_brief is not None:
+            record.state["final_brief"] = final_brief
+        if field_report is not None:
+            record.state["field_report"] = field_report
+        if program_state.get("program_name"):
+            record.state["program_name"] = program_state["program_name"]
+        if program_state.get("brand"):
+            record.state["brand"] = program_state["brand"]
 
 
 def _snapshot_run_response(snapshot: dict) -> dict[str, Any]:
@@ -698,22 +729,31 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         _mark(record, "query_generator", "error")
         return False
 
-    # 3. Retrieval
+    # 3. Retrieval — bracketed by the same enrichment nodes the LangGraph flow runs:
+    # app_ratings prefetch before Tavily, direct-URL seeding + Wikipedia after.
+    # Both are non-fatal: on failure the run continues with whatever retrieval found.
     if _stopped(record):
         return False
     _mark(record, "retrieval", "running")
     try:
+        state = _apply(record, app_ratings_node(state))
+    except Exception:
+        logger.exception("[%s] app_ratings prefetch failed (non-fatal)", record.run_id)
+    try:
         delta = retrieval_node(state)
         state = _apply(record, delta)
-        if state.get("retrieval_result"):
-            _mark(record, "retrieval", "done")
-        else:
+        if not state.get("retrieval_result"):
             _mark(record, "retrieval", "error")
             return False
     except Exception:
         logger.exception("[%s] retrieval crashed", record.run_id)
         _mark(record, "retrieval", "error")
         return False
+    try:
+        state = _apply(record, web_enrichment_node(state))
+    except Exception:
+        logger.exception("[%s] web_enrichment failed (non-fatal)", record.run_id)
+    _mark(record, "retrieval", "done")
 
     # 4. Firecrawl Scraper
     if _stopped(record):
@@ -1783,19 +1823,16 @@ def run_history() -> list[dict[str, Any]]:
         if current is None or priority >= current["_priority"]:
             result_map[run_id] = {**item, "_priority": priority}
 
-    for row in _db.list_program_snapshots(_db_conn, limit=100):
-        try:
-            state = json.loads(row["program_state_json"])
-        except Exception:
-            continue
-        run_id = state.get("run_id", "")
+    # Summary rows only — extracting metadata in SQL avoids parsing every
+    # snapshot's multi-MB state blob on each poll of this endpoint.
+    for row in _db.list_program_snapshot_summaries(_db_conn, limit=100):
         upsert({
-            "run_id": run_id,
-            "user_input": state.get("user_input") or row["program_name"],
-            "mode": state.get("mode") or "single",
+            "run_id": row.get("run_id") or "",
+            "user_input": row.get("user_input") or row["program_name"],
+            "mode": row.get("mode") or "single",
             "program_name": row["program_name"],
-            "data_quality": state.get("data_quality", 0.0),
-            "status": state.get("status") or "done",
+            "data_quality": row.get("data_quality") or 0.0,
+            "status": row.get("status") or "done",
             "created_at": row["created_at"],
             "source": "db",
         }, priority=1)
@@ -1846,15 +1883,23 @@ def create_run(body: CreateRunBody) -> dict[str, str]:
     if not body.user_input.strip():
         raise HTTPException(status_code=400, detail="user_input is required")
 
-    mode = body.mode if body.mode in ("single", "compare", "converse") else "single"
+    if body.mode not in ("single", "compare"):
+        raise HTTPException(status_code=400, detail="mode must be 'single' or 'compare'")
+    mode = body.mode
     run_id = new_id("run")
 
     # Normalise programs list for compare mode
     programs_list: list[str] | None = None
-    if mode == "compare" and body.programs:
-        clean = [p.strip() for p in body.programs if p.strip()]
-        if len(clean) >= 2:
-            programs_list = clean
+    if mode == "compare":
+        if body.programs:
+            clean = [p.strip() for p in body.programs if p.strip()]
+            if len(clean) >= 2:
+                programs_list = clean
+        if programs_list is None and not (body.user_input_b or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="compare mode requires at least two programs (via 'programs' or 'user_input_b')",
+            )
 
     record = RunRecord(run_id, body.user_input.strip(), mode, body.user_input_b, programs_list,
                        force_fresh=body.force_fresh)
@@ -1878,8 +1923,8 @@ def list_runs() -> list[dict[str, Any]]:
     )
 
 
-@app.get("/api/run/{run_id}")
-def get_run(run_id: str) -> dict[str, Any]:
+def _resolve_run_response(run_id: str) -> dict[str, Any]:
+    """Resolve a run_id to its serialized response dict from STORE, DB, or snapshot cache."""
     with STORE_LOCK:
         record = STORE.get(run_id)
     if record is None:
@@ -1910,6 +1955,34 @@ def get_run(run_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="run not found")
         return _snapshot_run_response(snapshot)
     return build_run_response(record)
+
+
+@app.get("/api/run/{run_id}")
+def get_run(run_id: str, full: bool = Query(False)) -> dict[str, Any]:
+    """Poll a run. Evidence payloads (scraped markdown, chunk text, raw
+    documents) are reduced to previews so the 2s polling loop stays light;
+    pass ?full=true for the complete state (exports, debugging).
+    """
+    response = _resolve_run_response(run_id)
+    return response if full else slim_run_state(response)
+
+
+@app.get("/api/run/{run_id}/export")
+def export_run(run_id: str, download: bool = Query(False)) -> Any:
+    """Structured JSON export of the final analyst output, with every field and
+    insight traceable back to its source URL(s). Pass ?download=true to receive
+    it as a downloadable attachment instead of a plain API response.
+    """
+    response = _resolve_run_response(run_id)
+    export = build_export(response)
+    if download:
+        filename = f"kobie_export_{run_id}.json"
+        return Response(
+            content=json.dumps(export, indent=2, default=str),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    return export
 
 
 def _do_delete_run(run_id: str) -> dict[str, Any]:

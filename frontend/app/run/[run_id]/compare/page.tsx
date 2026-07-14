@@ -27,6 +27,7 @@ import { SourcePillRow } from "@/components/SourcePill";
 import { DataQualityGauge } from "@/components/charts/DataQualityGauge";
 import { useRun, useGenerateBrief } from "@/lib/hooks";
 import { DownloadPDFButton } from "@/components/DownloadPDFButton";
+import { DownloadJSONButton } from "@/components/DownloadJSONButton";
 import { ConverseThread } from "@/components/ConverseThread";
 import { cn, signed, renderValue } from "@/lib/format";
 import { LinkifiedText, domainOf } from "@/lib/sources";
@@ -95,6 +96,39 @@ export default function ComparePage({ params }: { params: { run_id: string } }) 
 
   const compRun = state.comparison_run;
   const nPrograms = compRun?.total_programs ?? 2;
+
+  // Run still in progress: the comparison view has nothing meaningful to show
+  // yet — surface per-program status and point at the live progress page.
+  const isTerminal = ["done", "error", "cancelled"].includes(state.status);
+  if (!isTerminal) {
+    return (
+      <Frame runId={runId}>
+        <Centered>
+          <div className="text-center">
+            <Loader2 className="mx-auto h-6 w-6 animate-spin text-teal" />
+            <p className="mt-3 text-sm font-medium text-navy">Comparison in progress</p>
+            <p className="mt-1 text-sm text-ink/50">
+              The pipeline is still analyzing the programs. The comparison appears here when it finishes.
+            </p>
+            {compRun && (
+              <ul className="mt-3 space-y-1 text-sm text-ink/60">
+                {compRun.programs.map((prog, i) => (
+                  <li key={i}>
+                    {prog} — {compRun.program_statuses[i]}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <Link href={`/run/${runId}`} className="mt-4 inline-block">
+              <Button variant="outline" size="sm">
+                <ArrowLeft className="h-4 w-4" /> View live progress
+              </Button>
+            </Link>
+          </div>
+        </Centered>
+      </Frame>
+    );
+  }
 
   // N>2 programs: render multi-program view
   if (compRun && nPrograms > 2) {
@@ -195,10 +229,10 @@ function TwoProgramView({ runId, state }: { runId: string; state: AgentState }) 
 
       {brief ? (
         <ComparisonBriefPanel brief={brief} />
-      ) : generateBrief.isPending || (!isDone) ? (
+      ) : generateBrief.isPending ? (
         <div className="flex items-center gap-2 rounded-card border border-line bg-white px-5 py-4 text-sm text-ink/50 shadow-sm">
           <Loader2 className="h-4 w-4 animate-spin" />
-          {generateBrief.isPending ? "Generating competitive intelligence brief…" : "Generating competitive intelligence brief…"}
+          Generating competitive intelligence brief…
         </div>
       ) : generateBrief.isError ? (
         <>
@@ -578,7 +612,7 @@ function MultiProgramView({
       {/* AI brief — shown when available */}
       {brief ? (
         <ComparisonBriefPanel brief={brief} />
-      ) : generateBrief.isPending || !isDone ? (
+      ) : generateBrief.isPending ? (
         <div className="flex items-center gap-2 rounded-card border border-line bg-white px-5 py-4 text-sm text-ink/50 shadow-sm">
           <Loader2 className="h-4 w-4 animate-spin" />
           Generating competitive intelligence brief…
@@ -868,23 +902,47 @@ function Frame({ runId, children }: { runId: string; children: React.ReactNode }
   return (
     <div className="min-h-screen">
       <Topbar>
-        {state && state.status === "done" && (
-          <DownloadPDFButton state={state} variant="compare" />
-        )}
-        <Link href="/history">
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
-            <History className="h-4 w-4" /> History
-          </Button>
-        </Link>
+        <div className="flex items-center gap-1.5">
+          {state && state.status === "done" && (
+            <>
+              <DownloadJSONButton
+                runId={runId}
+                programName={state.program_name}
+                variant="ghost"
+                className="h-9 gap-1.5 border border-white/10 px-3 text-xs font-medium text-white/80 hover:border-white/20 hover:bg-white/10 hover:text-white"
+              />
+              <DownloadPDFButton
+                state={state}
+                variant="compare"
+                buttonVariant="ghost"
+                className="h-9 gap-1.5 border border-white/10 px-3 text-xs font-medium text-white/80 hover:border-white/20 hover:bg-white/10 hover:text-white"
+              />
+            </>
+          )}
+          <Link href="/history">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-9 gap-1.5 border border-white/10 px-3 text-xs font-medium text-white/80 hover:border-white/20 hover:bg-white/10 hover:text-white"
+            >
+              <History className="h-3.5 w-3.5" /> History
+            </Button>
+          </Link>
+        </div>
+
+        <div className="mx-2.5 h-5 w-px bg-white/10" />
+
         <Link href={`/run/${runId}`}>
-          <Button size="sm" variant="outline">
-            <ArrowLeft className="h-4 w-4" /> Run
+          <Button size="sm" variant="primary" className="h-9 gap-1.5 px-4 text-xs font-semibold">
+            <ArrowLeft className="h-3.5 w-3.5" /> Run
           </Button>
         </Link>
-        <Link href="/">
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
-            New <ArrowRight className="h-4 w-4" />
-          </Button>
+
+        <Link
+          href="/"
+          className="ml-2.5 flex items-center gap-1 text-xs font-medium text-white/50 transition-colors hover:text-white"
+        >
+          New <ArrowRight className="h-3.5 w-3.5" />
         </Link>
       </Topbar>
       {children}

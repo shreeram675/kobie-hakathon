@@ -1,8 +1,10 @@
 """Conflict adjudicator node: detect disagreeing claims and resolve them.
 
-Runs after extraction/normalization. Conflicts where the confidence gap is
-decisive (> 0.20) auto-resolve to the stronger claim; close calls go through
-the 5-step adversarial debate engine. The logic is program-agnostic — every
+Runs after extraction/normalization. Equivalent values auto-resolve, merge-type
+fields (range/union/recency/majority_vote) resolve deterministically, and
+single-truth fields with a decisive confidence gap (> 0.20) auto-resolve to the
+stronger claim; remaining close calls go through the 5-step adversarial debate
+engine. The logic is program-agnostic — every
 value, source, and date comes from the pipeline state, never from the model.
 """
 
@@ -12,6 +14,7 @@ import asyncio
 from collections import defaultdict
 from datetime import date, datetime
 import json
+import re
 from typing import Any
 
 from core.schemas import AgentState, FieldReport, NormalizedObjectPacket, RawDocument, new_id, now_iso
@@ -199,18 +202,53 @@ def _classify_field_strategy(field_name: str) -> str:
     return FIELD_STRATEGY_MAP.get(suffix, "debate")
 
 
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _normalize_value_text(value: Any) -> str:
+    """Canonicalize a claim value for equality checks only (never for display).
+
+    Lowercases, collapses whitespace, strips thousands separators, and
+    canonicalizes numeric tokens so "1.50" == "1.5" and "1,000" == "1000".
+    """
+    text = " ".join(str(value or "").strip().lower().split())
+    text = re.sub(r"[™®©]", "", text)
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)
+    return _NUMBER_RE.sub(lambda m: format(float(m.group(0)), "g"), text)
+
+
+def _display_text(value: Any) -> str:
+    """Render a claim value for display — lists join readably, never Python repr."""
+    if isinstance(value, list):
+        return ", ".join(_display_text(item) for item in value)
+    return str(value) if value is not None else ""
+
+
+def _values_equivalent(value_a: Any, value_b: Any) -> bool:
+    normalized_a = _normalize_value_text(value_a)
+    return normalized_a != "" and normalized_a == _normalize_value_text(value_b)
+
+
 def _resolve_range(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
     """Merge multiple numeric/rate values into a range entry."""
     values = [str(g["value"]) for g in groups]
     all_urls = list({url for g in groups for url in g.get("source_urls", set())})
-    merged = " / ".join(values) if len(values) > 1 else values[0]
+    try:
+        numbers = [float(v.strip()) for v in values]
+        merged = (
+            f"{format(min(numbers), 'g')}–{format(max(numbers), 'g')}"
+            if len(set(numbers)) > 1
+            else format(numbers[0], "g")
+        )
+    except ValueError:
+        merged = " / ".join(values) if len(values) > 1 else values[0]
     confidence = max(float(g.get("confidence") or 0.0) for g in groups)
     return {
         "value": merged,
         "source_urls": all_urls,
         "confidence": confidence,
         "all_values": [
-            {"value": str(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
+            {"value": _display_text(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
             for g in groups
         ],
         "conflict_type": "range",
@@ -219,14 +257,22 @@ def _resolve_range(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, 
 
 
 def _resolve_union(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
-    """Union all values across sources, deduplicated."""
+    """Union all values across sources, deduplicated on normalized text.
+
+    List values are flattened into individual items so "['a', 'b']" never
+    renders as a Python repr, and normalization folds case/™ so
+    "My Best Buy Plus™" and "my best buy plus" merge into one item.
+    """
     seen: set[str] = set()
     merged_items: list[str] = []
     for g in groups:
-        val = str(g["value"])
-        if val.lower() not in seen:
-            seen.add(val.lower())
-            merged_items.append(val)
+        items = g["value"] if isinstance(g["value"], list) else [g["value"]]
+        for item in items:
+            val = str(item)
+            key = _normalize_value_text(val)
+            if key and key not in seen:
+                seen.add(key)
+                merged_items.append(val)
     all_urls = list({url for g in groups for url in g.get("source_urls", set())})
     confidence = max(float(g.get("confidence") or 0.0) for g in groups)
     return {
@@ -234,7 +280,7 @@ def _resolve_union(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, 
         "source_urls": all_urls,
         "confidence": confidence,
         "all_values": [
-            {"value": str(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
+            {"value": _display_text(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
             for g in groups
         ],
         "conflict_type": "union",
@@ -243,20 +289,24 @@ def _resolve_union(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, 
 
 
 def _resolve_recency(_field_name: str, groups: list[dict[str, Any]], documents_by_url: dict[str, Any]) -> dict[str, Any]:
-    """Keep the most recently sourced value."""
-    def _date_of_group(g: dict[str, Any]) -> date:
+    """Keep the most recently sourced value; break same-day ties by confidence.
+
+    Documents fetched in the same run share a retrieved_at date, so without the
+    confidence tiebreak this would pick an arbitrary group.
+    """
+    def _recency_key(g: dict[str, Any]) -> tuple[date, float]:
         url = _best_url(g["source_urls"])
         doc = documents_by_url.get(url) if url else None
-        return _document_date(doc)
+        return (_document_date(doc), float(g.get("confidence") or 0.0))
 
-    best = max(groups, key=_date_of_group)
+    best = max(groups, key=_recency_key)
     all_urls = list({url for g in groups for url in g.get("source_urls", set())})
     return {
-        "value": str(best["value"]),
+        "value": _display_text(best["value"]),
         "source_urls": all_urls,
         "confidence": float(best.get("confidence") or 0.0),
         "all_values": [
-            {"value": str(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
+            {"value": _display_text(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
             for g in groups
         ],
         "conflict_type": "recency",
@@ -265,15 +315,24 @@ def _resolve_recency(_field_name: str, groups: list[dict[str, Any]], documents_b
 
 
 def _resolve_majority_vote(_field_name: str, groups: list[dict[str, Any]]) -> dict[str, Any]:
-    """Majority-vote: pick the value backed by the most source URLs."""
-    best = max(groups, key=lambda g: (len(g.get("source_urls", set())), float(g.get("confidence") or 0.0)))
+    """Majority-vote: pick the value backed by the most independent sources.
+
+    Prefers the explicit corroboration count when present — reconstructed
+    groups carry a single representative URL, so len(source_urls) alone would
+    degenerate to a confidence comparison.
+    """
+    def _votes(g: dict[str, Any]) -> tuple[int, float]:
+        votes = int(g.get("corroboration") or 0) or len(g.get("source_urls", set()))
+        return (votes, float(g.get("confidence") or 0.0))
+
+    best = max(groups, key=_votes)
     all_urls = list({url for g in groups for url in g.get("source_urls", set())})
     return {
-        "value": str(best["value"]),
+        "value": _display_text(best["value"]),
         "source_urls": all_urls,
         "confidence": float(best.get("confidence") or 0.0),
         "all_values": [
-            {"value": str(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
+            {"value": _display_text(g["value"]), "source_url": _best_url(g["source_urls"]), "context": None}
             for g in groups
         ],
         "conflict_type": "majority_vote",
@@ -290,9 +349,11 @@ def adjudicator_node(state: AgentState) -> AgentState:
     """Resolve every conflict in state into state["adjudicated"].
 
     Resolution order per conflict:
-      1. Values identical → auto-resolve (no LLM).
-      2. Confidence gap > threshold → auto-resolve (no LLM).
-      3. Field-type strategy (range/union/recency/majority_vote) → deterministic merge (no LLM).
+      1. Values equivalent (numeric-normalized) → auto-resolve (no LLM).
+      2. Field-type strategy (range/union/recency/majority_vote) → deterministic merge (no LLM).
+         Runs BEFORE the confidence-gap check so merge-type fields never discard
+         legitimate values just because one source scored higher.
+      3. Confidence gap > threshold (single-truth debate fields only) → auto-resolve (no LLM).
       4. Pre-flight complementary classifier → if complementary, create MERGE entry (1 LLM call).
       5. Adversarial debate (5-step, 3-5 LLM calls) → winner A/B/FLAG/MERGE.
     """
@@ -321,17 +382,19 @@ def adjudicator_node(state: AgentState) -> AgentState:
         confidence_a = float(conflict["claim_a"].get("confidence") or 0.0)
         confidence_b = float(conflict["claim_b"].get("confidence") or 0.0)
         score_gap = abs(confidence_a - confidence_b)
-        value_a_str = str(conflict["claim_a"].get("value") or "").strip().lower()
-        value_b_str = str(conflict["claim_b"].get("value") or "").strip().lower()
-        values_identical = value_a_str == value_b_str and value_a_str != ""
+        values_identical = _values_equivalent(conflict["claim_a"].get("value"), conflict["claim_b"].get("value"))
+        strategy = _classify_field_strategy(conflict["field_name"])
+        source_claims = conflict.get("all_claims") or [conflict["claim_a"], conflict["claim_b"]]
 
         all_values_both = [
-            {"value": str(conflict["claim_a"].get("value") or ""), "source_url": conflict["claim_a"].get("source_url"), "context": None},
-            {"value": str(conflict["claim_b"].get("value") or ""), "source_url": conflict["claim_b"].get("source_url"), "context": None},
+            {"value": _display_text(claim.get("value")), "source_url": claim.get("source_url"), "context": None}
+            for claim in source_claims
         ]
 
-        # ── Step 1 & 2: identical values or decisive confidence gap ──────────
-        if score_gap > AUTO_RESOLVE_SCORE_GAP or values_identical:
+        # ── Steps 1 & 3: equivalent values, or decisive confidence gap on a
+        # single-truth field. Merge-type fields skip the gap check — a higher
+        # confidence doesn't make the other source's value wrong for them.
+        if values_identical or (strategy == "debate" and score_gap > AUTO_RESOLVE_SCORE_GAP):
             winner = "A" if confidence_a >= confidence_b else "B"
             claim = conflict["claim_a"] if winner == "A" else conflict["claim_b"]
             adjudicated.append({
@@ -339,7 +402,7 @@ def adjudicator_node(state: AgentState) -> AgentState:
                 "field_path": conflict["field_name"],
                 "conflict_id": new_id("adjudicated"),
                 "winner": winner,
-                "value": str(claim["value"]),
+                "value": _display_text(claim["value"]),
                 "source_url": claim.get("source_url"),
                 "confidence": float(claim.get("confidence") or 0.0),
                 "resolution": "auto",
@@ -350,8 +413,8 @@ def adjudicator_node(state: AgentState) -> AgentState:
                     if values_identical
                     else f"Score gap {score_gap:.2f} > {AUTO_RESOLVE_SCORE_GAP} auto-resolved without debate."
                 ),
-                "value_a": str(conflict["claim_a"].get("value") or ""),
-                "value_b": str(conflict["claim_b"].get("value") or ""),
+                "value_a": _display_text(conflict["claim_a"].get("value")),
+                "value_b": _display_text(conflict["claim_b"].get("value")),
                 "url_a": conflict["claim_a"].get("source_url"),
                 "url_b": conflict["claim_b"].get("source_url"),
                 "all_values": all_values_both,
@@ -370,15 +433,14 @@ def adjudicator_node(state: AgentState) -> AgentState:
                     if values_identical
                     else f"Auto-resolved: confidence gap {score_gap:.2f} exceeded threshold."
                 ),
-                "value_a": str(conflict["claim_a"].get("value") or ""),
-                "value_b": str(conflict["claim_b"].get("value") or ""),
+                "value_a": _display_text(conflict["claim_a"].get("value")),
+                "value_b": _display_text(conflict["claim_b"].get("value")),
                 "url_a": conflict["claim_a"].get("source_url"),
                 "url_b": conflict["claim_b"].get("source_url"),
             })
             continue
 
-        # ── Step 3: field-type strategy (deterministic, no LLM) ─────────────
-        strategy = _classify_field_strategy(conflict["field_name"])
+        # ── Step 2: field-type strategy (deterministic, no LLM) ─────────────
         if strategy != "debate":
             conflict_records.append({
                 "conflict_id": new_id("conflict"),
@@ -388,15 +450,21 @@ def adjudicator_node(state: AgentState) -> AgentState:
                 "score_gap": round(score_gap, 4),
                 "resolution_status": "auto_resolved",
                 "judge_reason": f"Field-type strategy '{strategy}' applied.",
-                "value_a": str(conflict["claim_a"].get("value") or ""),
-                "value_b": str(conflict["claim_b"].get("value") or ""),
+                "value_a": _display_text(conflict["claim_a"].get("value")),
+                "value_b": _display_text(conflict["claim_b"].get("value")),
                 "url_a": conflict["claim_a"].get("source_url"),
                 "url_b": conflict["claim_b"].get("source_url"),
             })
-            # Reconstruct minimal group dicts so strategy functions work
+            # Reconstruct minimal group dicts (from ALL distinct value groups,
+            # not just the top two) so strategy functions work
             groups_for_strategy = [
-                {"value": conflict["claim_a"]["value"], "source_urls": {conflict["claim_a"]["source_url"] or ""}, "confidence": confidence_a},
-                {"value": conflict["claim_b"]["value"], "source_urls": {conflict["claim_b"]["source_url"] or ""}, "confidence": confidence_b},
+                {
+                    "value": claim["value"],
+                    "source_urls": {claim.get("source_url") or ""},
+                    "confidence": float(claim.get("confidence") or 0.0),
+                    "corroboration": int(claim.get("corroboration") or 1),
+                }
+                for claim in source_claims
             ]
             documents_by_url = {doc.url: doc for doc in (state.get("raw_documents") or [])}
             if strategy == "range":
@@ -421,8 +489,8 @@ def adjudicator_node(state: AgentState) -> AgentState:
                 "deciding_factor": "field_type_strategy",
                 "strategy": strategy,
                 "reasoning": f"Field strategy '{strategy}': values merged without debate.",
-                "value_a": str(conflict["claim_a"].get("value") or ""),
-                "value_b": str(conflict["claim_b"].get("value") or ""),
+                "value_a": _display_text(conflict["claim_a"].get("value")),
+                "value_b": _display_text(conflict["claim_b"].get("value")),
                 "url_a": conflict["claim_a"].get("source_url"),
                 "url_b": conflict["claim_b"].get("source_url"),
                 "all_values": resolved["all_values"],
@@ -447,8 +515,8 @@ def adjudicator_node(state: AgentState) -> AgentState:
             "score_gap": round(score_gap, 4),
             "resolution_status": "debate_required",
             "judge_reason": "",
-            "value_a": str(conflict["claim_a"].get("value") or ""),
-            "value_b": str(conflict["claim_b"].get("value") or ""),
+            "value_a": _display_text(conflict["claim_a"].get("value")),
+            "value_b": _display_text(conflict["claim_b"].get("value")),
             "url_a": conflict["claim_a"].get("source_url"),
             "url_b": conflict["claim_b"].get("source_url"),
         })
@@ -556,8 +624,8 @@ async def _run_debates_with_classifier(conflicts: list[dict[str, Any]]) -> list[
                     "context_b": classification.get("context_b"),
                     "conflict_type": "complementary",
                     "all_values": [
-                        {"value": str(claim_a["value"]), "source_url": claim_a.get("source_url"), "context": classification.get("context_a")},
-                        {"value": str(claim_b["value"]), "source_url": claim_b.get("source_url"), "context": classification.get("context_b")},
+                        {"value": _display_text(claim_a["value"]), "source_url": claim_a.get("source_url"), "context": classification.get("context_a")},
+                        {"value": _display_text(claim_b["value"]), "source_url": claim_b.get("source_url"), "context": classification.get("context_b")},
                     ],
                     "rebuttal_assessment": {"A_rebuttal": "weak", "B_rebuttal": "weak"},
                     "hallucination_detected": {"argument_a": False, "argument_b": False, "rebuttal_a": False, "rebuttal_b": False},
@@ -576,8 +644,8 @@ async def _run_debates_with_classifier(conflicts: list[dict[str, Any]]) -> list[
                 "reasoning": f"Debate engine error: {exc}",
                 "conflict_type": "contradictory",
                 "all_values": [
-                    {"value": str(claim_a.get("value") or ""), "source_url": claim_a.get("source_url"), "context": None},
-                    {"value": str(claim_b.get("value") or ""), "source_url": claim_b.get("source_url"), "context": None},
+                    {"value": _display_text(claim_a.get("value")), "source_url": claim_a.get("source_url"), "context": None},
+                    {"value": _display_text(claim_b.get("value")), "source_url": claim_b.get("source_url"), "context": None},
                 ],
                 "rebuttal_assessment": {"A_rebuttal": "weak", "B_rebuttal": "weak"},
                 "hallucination_detected": {"argument_a": False, "argument_b": False, "rebuttal_a": False, "rebuttal_b": False},
@@ -625,9 +693,13 @@ def _entries_from_debate(conflict: dict[str, Any], result: dict[str, Any]) -> li
     claim_b = conflict["claim_b"]
     winner = result["winner"]
     all_values = result.get("all_values") or [
-        {"value": str(claim_a.get("value") or ""), "source_url": claim_a.get("source_url"), "context": None},
-        {"value": str(claim_b.get("value") or ""), "source_url": claim_b.get("source_url"), "context": None},
+        {"value": _display_text(claim_a.get("value")), "source_url": claim_a.get("source_url"), "context": None},
+        {"value": _display_text(claim_b.get("value")), "source_url": claim_b.get("source_url"), "context": None},
     ]
+    # The debate only weighs the top two claims; carry any lower-ranked
+    # values through so no observed value disappears from the record.
+    for extra in (conflict.get("all_claims") or [])[2:]:
+        all_values.append({"value": _display_text(extra.get("value")), "source_url": extra.get("source_url"), "context": None})
     conflict_type = result.get("conflict_type", "contradictory")
 
     if winner == "FLAG":
@@ -638,7 +710,7 @@ def _entries_from_debate(conflict: dict[str, Any], result: dict[str, Any]) -> li
                 "field_path": conflict["field_name"],
                 "conflict_id": new_id("adjudicated"),
                 "winner": "FLAG",
-                "value": str(claim["value"]),
+                "value": _display_text(claim["value"]),
                 "source_url": claim.get("source_url"),
                 "confidence": flag_confidence,
                 "resolution": "flag",
@@ -721,7 +793,9 @@ def detect_conflicts_from_packets(
 
     Groups EXTRACTED values per field path across all packets; when at least
     two distinct values are backed by distinct sources, the two strongest
-    value groups become claim_a and claim_b.
+    value groups become claim_a and claim_b. Every distinct value group is
+    carried in all_claims (strongest first) so merge strategies and the final
+    all_values record never silently drop a third-ranked value.
     """
 
     documents_by_url = {document.url: document for document in raw_documents}
@@ -739,7 +813,9 @@ def detect_conflicts_from_packets(
                 continue
             if field.status not in ("EXTRACTED", "AMBIGUOUS"):
                 continue
-            value_key = json.dumps(field.value, sort_keys=True, ensure_ascii=True, default=str)
+            # Fold case/trademark noise so "Delta" and "delta™" corroborate the
+            # same value group instead of manufacturing a conflict.
+            value_key = _normalize_value_text(json.dumps(field.value, sort_keys=True, ensure_ascii=True, default=str))
             group = groups[field_name].setdefault(
                 value_key,
                 {"value": field.value, "source_urls": set(), "confidence": 0.0},
@@ -758,8 +834,11 @@ def detect_conflicts_from_packets(
             key=lambda group: (len(group["source_urls"]), group["confidence"]),
             reverse=True,
         )
-        claim_a = _claim_from_group(ranked[0], documents_by_url, program_domain, program_name, brand)
-        claim_b = _claim_from_group(ranked[1], documents_by_url, program_domain, program_name, brand)
+        all_claims = [
+            _claim_from_group(group, documents_by_url, program_domain, program_name, brand)
+            for group in ranked
+        ]
+        claim_a, claim_b = all_claims[0], all_claims[1]
         if claim_a["source_url"] == claim_b["source_url"]:
             continue
         conflicts.append(
@@ -768,6 +847,7 @@ def detect_conflicts_from_packets(
                 "volatility": classify_volatility(field_name),
                 "claim_a": claim_a,
                 "claim_b": claim_b,
+                "all_claims": all_claims,
             }
         )
     return conflicts
@@ -884,7 +964,7 @@ def _claim_from_group(
         _document_authority(document), source_url, program_domain, program_name, brand
     )
     return {
-        "value": str(group["value"]),
+        "value": _display_text(group["value"]),
         "source_url": source_url,
         "date": _document_date(document),
         "authority": authority,

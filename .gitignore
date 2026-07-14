@@ -2,7 +2,6 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-.streamlit/secrets.toml
 kobie.sqlite3
 kobie.sqlite3-shm
 kobie.sqlite3-wal
@@ -11,7 +10,10 @@ Kobie_Phase2_ArcGuide_Updated.pdf
 .env
 *.log
 frontend/.env.local
+# Windows teammate's pytest basetemp resolves to this relative dir on macOS
 UsersshreeramAppDataLocalTempkobi-pytest/
 .backend.pid
 .frontend.pid
 db_corrupted_backup/
+.DS_Store
+*.tsbuildinfo

@@ -290,10 +290,24 @@ def test_normalizer_preserves_snippet_and_hashes_identity():
     first = normalize_packet(packet, runtime_schema())
     second = normalize_packet(packet, runtime_schema())
 
-    assert first.fields["name"].value == "acme"
+    # Original casing is preserved for display; only whitespace is trimmed.
+    assert first.fields["name"].value == "Acme"
     assert first.fields["name"].source_snippet == " Acme "
     assert first.fields["employees"].value == 42
     assert first.identity_hash == second.identity_hash
+
+    # Identity hashing folds case, so differently-cased extractions still group.
+    lowercase_packet = packet.model_copy(
+        update={
+            "fields": {
+                **packet.fields,
+                "name": packet.fields["name"].model_copy(update={"value": " ACME "}),
+            }
+        }
+    )
+    third = normalize_packet(lowercase_packet, runtime_schema())
+    assert third.fields["name"].value == "ACME"
+    assert third.identity_hash == first.identity_hash
 
 
 def test_generate_identity_hash_uses_uuid_when_no_identity_fields(monkeypatch):

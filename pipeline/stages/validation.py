@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Any, Protocol
+import time
+from typing import Any, Callable, Protocol
 
 import requests
 
 from core import cost_tracker
 from core.providers import provider_for_stage
 from core.schemas import ClarificationOption, ProgramIdentity, SearchContext, ValidationResult
+
+
+logger = logging.getLogger(__name__)
+
+# Returns True (program corroborated by search), False (no evidence it exists),
+# or None (corroboration unavailable — no key, network error, etc.).
+Corroborator = Callable[[str], bool | None]
 
 
 _INJECTION_PATTERN = re.compile(
@@ -52,11 +61,11 @@ DECISION PRIORITY ORDER
 ═══════════════════════════════════════════════════════
 
 STEP 1 — RESOLVE DIRECTLY (confidence ≥ 0.90)
-If web search returns a single clear loyalty program match, return "resolved"
-immediately. Do not ask questions.
+If the input matches a single clear loyalty program you know from training
+data, return "resolved" immediately. Do not ask questions.
 
 STEP 2 — SHOW POSSIBLE MATCHES (before asking any question)
-If search returns 2–5 real programs that could match, return "needs_clarification"
+If 2–5 real programs you know could match, return "needs_clarification"
 with a populated "possible_matches" list. Add a follow_up_question only if it
 meaningfully narrows the list.
 
@@ -74,7 +83,7 @@ would narrow it significantly.
 ANTI-HALLUCINATION RULES
 ═══════════════════════════════════════════════════════
 - Never invent a loyalty program, brand, company, or domain
-- Only return "resolved" for a real, confirmed loyalty program found via search
+- Only return "resolved" for a real loyalty program you are confident exists
 - Do not fabricate programs by appending Rewards, Club, Points, Plus to input
 - If input is fictional, nonsensical, or unrelated to loyalty, return "rejected"
 - User confirmation cannot make a fictional or unverified program real
@@ -234,6 +243,9 @@ class OpenAICompatibleChatClient:
         self.api_key = provider.api_key
         self.model = provider.resolved_model
 
+    MAX_ATTEMPTS = 4
+    MAX_RETRY_SLEEP_SECONDS = 15.0
+
     def complete_json(self, messages: list[dict[str, str]]) -> dict[str, Any]:
         if not self.api_base or not self.api_key or not self.model:
             raise RuntimeError(
@@ -241,20 +253,37 @@ class OpenAICompatibleChatClient:
                 "INPUT_VERIFIER_API_KEY, and INPUT_VERIFIER_MODEL."
             )
 
-        response = requests.post(
-            self.api_base,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": messages,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=45,
-        )
+        response = None
+        for attempt in range(self.MAX_ATTEMPTS):
+            response = requests.post(
+                self.api_base,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=45,
+            )
+            if response.status_code not in (429, 500, 502, 503, 504) or attempt == self.MAX_ATTEMPTS - 1:
+                break
+            # Prefer the provider's suggested wait ("try again in 7.66s"),
+            # otherwise back off exponentially; cap so a daily-quota 429 with a
+            # huge retry-after cannot stall the run.
+            match = re.search(r"try again in ([0-9.]+)s", response.text)
+            delay = float(match.group(1)) + 0.5 if match else 2.0 * (attempt + 1)
+            delay = min(delay, self.MAX_RETRY_SLEEP_SECONDS)
+            logger.warning(
+                "Input verifier got HTTP %s (attempt %d/%d), retrying in %.1fs",
+                response.status_code, attempt + 1, self.MAX_ATTEMPTS, delay,
+            )
+            time.sleep(delay)
+
+        assert response is not None
         response.raise_for_status()
         payload = response.json()
         usage = payload.get("usage", {})
@@ -275,14 +304,26 @@ def parse_json_content(content: str) -> dict[str, Any]:
         return json.loads(match.group(0))
 
 
-def validate_input(user_input: str, chat_client: ChatClient | None = None) -> ValidationResult:
+def validate_input(
+    user_input: str,
+    chat_client: ChatClient | None = None,
+    corroborator: Corroborator | None = None,
+) -> ValidationResult:
     if not user_input.strip():
         return ValidationResult(status="rejected", confidence=0, reason="Input is empty.")
 
-    return validate_conversation([{"role": "user", "content": user_input.strip()}], chat_client=chat_client)
+    return validate_conversation(
+        [{"role": "user", "content": user_input.strip()}],
+        chat_client=chat_client,
+        corroborator=corroborator,
+    )
 
 
-def validate_conversation(messages: list[dict[str, str]], chat_client: ChatClient | None = None) -> ValidationResult:
+def validate_conversation(
+    messages: list[dict[str, str]],
+    chat_client: ChatClient | None = None,
+    corroborator: Corroborator | None = None,
+) -> ValidationResult:
     user_messages = [message["content"].strip() for message in messages if message.get("role") == "user" and message.get("content", "").strip()]
     if not user_messages:
         return ValidationResult(status="rejected", confidence=0, reason="Input is empty.")
@@ -302,18 +343,30 @@ def validate_conversation(messages: list[dict[str, str]], chat_client: ChatClien
                 *messages,
             ]
         )
-    except Exception as exc:
+    except Exception:
+        logger.exception("Input verifier LLM call failed")
         return ValidationResult(
             status="needs_clarification",
             confidence=0,
-            follow_up_questions=["Input verifier LLM is not configured or failed. Which loyalty program should Kobie research?"],
-            reason=str(exc),
+            follow_up_questions=["Which loyalty program should Kobie research?"],
+            reason=(
+                "The input verifier is temporarily unavailable (provider error or rate limit). "
+                "Please try again in a moment."
+            ),
         )
 
-    return _parse_verifier_output(user_input=" | ".join(user_messages), payload=raw_result)
+    return _parse_verifier_output(
+        user_input=" | ".join(user_messages),
+        payload=raw_result,
+        corroborator=corroborator,
+    )
 
 
-def _parse_verifier_output(user_input: str, payload: dict[str, Any]) -> ValidationResult:
+def _parse_verifier_output(
+    user_input: str,
+    payload: dict[str, Any],
+    corroborator: Corroborator | None = None,
+) -> ValidationResult:
     status = payload.get("status")
     confidence = float(payload.get("confidence", 0))
 
@@ -326,12 +379,21 @@ def _parse_verifier_output(user_input: str, payload: dict[str, Any]) -> Validati
         )
 
     if status == "resolved" and confidence >= 0.90:
-        if _looks_like_unknown_or_fictional_input(user_input) and _looks_like_synthetic_program_name(user_input, payload):
-            return ValidationResult(
-                status="rejected",
-                confidence=0,
-                reason="Could not identify a real loyalty program from the input provided.",
-            )
+        if _needs_existence_check(user_input, payload):
+            corroborated = (corroborator or _search_corroboration)(str(payload.get("program_name") or ""))
+            if corroborated is False:
+                return ValidationResult(
+                    status="rejected",
+                    confidence=0,
+                    reason="Could not verify that this loyalty program exists. Please check the program name or provide the company's official website.",
+                )
+            if corroborated is None and _looks_like_unknown_or_fictional_input(user_input) and _looks_like_synthetic_program_name(user_input, payload):
+                # Corroboration unavailable — fall back to the heuristic guard.
+                return ValidationResult(
+                    status="rejected",
+                    confidence=0,
+                    reason="Could not identify a real loyalty program from the input provided.",
+                )
         raw_sc = payload.get("search_context")
         search_context = None
         if isinstance(raw_sc, dict):
@@ -427,13 +489,71 @@ def verifier_result_as_message(result: ValidationResult) -> dict[str, str]:
     }
 
 
+_SYNTHETIC_SUFFIXES = (" rewards", " loyalty", " club", " points", " plus", " membership")
+
+
+def _needs_existence_check(user_input: str, payload: dict[str, Any]) -> bool:
+    """Decide whether a resolved program is suspicious enough to corroborate.
+
+    Generic-suffix names ("X Rewards") are exactly the shape LLMs hallucinate by
+    appending a suffix to whatever the user typed, so those get one cheap search
+    before a full pipeline run is committed. Distinctive names (e.g. "Marriott
+    Bonvoy") skip the check to avoid spending search credits on every run.
+    """
+    program_name = str(payload.get("program_name") or "").lower()
+    if any(program_name.endswith(suffix) for suffix in _SYNTHETIC_SUFFIXES):
+        return True
+    return _looks_like_unknown_or_fictional_input(user_input)
+
+
+# Generic loyalty vocabulary — carries no signal about WHICH program a page covers.
+_GENERIC_NAME_TOKENS = frozenset(
+    {"rewards", "reward", "loyalty", "club", "points", "plus", "membership", "member", "program", "card", "the", "my"}
+)
+_LOYALTY_CONTEXT_TOKENS = frozenset(
+    {"loyalty", "reward", "rewards", "points", "member", "members", "membership", "miles", "cashback", "perks", "program"}
+)
+
+
+def _search_corroboration(program_name: str) -> bool | None:
+    """One Tavily search to confirm the resolved program actually exists.
+
+    A result corroborates the program when its title/URL contains every
+    distinctive token of the name (generic words like "rewards" excluded —
+    official names often differ, e.g. "Best Buy Rewards" vs "My Best Buy")
+    AND the same result shows loyalty-program context. Returns True/False,
+    or None when corroboration is unavailable (no key, network error).
+    """
+    if not program_name.strip():
+        return None
+    try:
+        from pipeline.stages.retrieval import TavilyRestClient
+
+        client = TavilyRestClient()
+        if not client.api_key:
+            return None
+        results = client.search(f'"{program_name}" loyalty program', max_results=5)
+    except Exception:
+        logger.exception("Corroboration search failed for %r — skipping check", program_name)
+        return None
+
+    all_tokens = re.findall(r"[a-z0-9]+", program_name.lower())
+    distinctive = [t for t in all_tokens if t not in _GENERIC_NAME_TOKENS] or all_tokens
+    for result in results:
+        identity_blob = " ".join(str(result.get(key) or "") for key in ("title", "url")).lower()
+        context_blob = (identity_blob + " " + str(result.get("content") or "").lower())
+        context_tokens = set(re.findall(r"[a-z0-9]+", context_blob))
+        if all(token in identity_blob for token in distinctive) and context_tokens & _LOYALTY_CONTEXT_TOKENS:
+            return True
+    return False
+
+
 def _looks_like_synthetic_program_name(user_input: str, payload: dict[str, Any]) -> bool:
     program_name = str(payload.get("program_name") or "").lower()
     brand = str(payload.get("brand") or "").lower()
     user_text = user_input.lower()
-    synthetic_suffixes = (" rewards", " loyalty", " club", " points", " plus", " membership")
 
-    if not any(program_name.endswith(suffix) for suffix in synthetic_suffixes):
+    if not any(program_name.endswith(suffix) for suffix in _SYNTHETIC_SUFFIXES):
         return False
     if program_name in user_text:
         return False

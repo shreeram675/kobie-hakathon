@@ -9,10 +9,11 @@ interface Props {
   state: AgentState;
   variant: "single" | "compare";
   size?: "sm" | "md" | "lg";
+  buttonVariant?: "primary" | "secondary" | "ghost" | "outline";
   className?: string;
 }
 
-export function DownloadPDFButton({ state, variant, size = "sm", className }: Props) {
+export function DownloadPDFButton({ state, variant, size = "sm", buttonVariant = "outline", className }: Props) {
   const [loading, setLoading] = useState(false);
 
   const handleDownload = async () => {
@@ -67,15 +68,15 @@ export function DownloadPDFButton({ state, variant, size = "sm", className }: Pr
   return (
     <Button
       size={size}
-      variant="outline"
+      variant={buttonVariant}
       onClick={handleDownload}
       disabled={loading}
       className={className}
     >
       {loading ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
       ) : (
-        <Download className="h-4 w-4" />
+        <Download className="h-3.5 w-3.5" />
       )}
       {loading ? "Generating PDF…" : "Download PDF"}
     </Button>

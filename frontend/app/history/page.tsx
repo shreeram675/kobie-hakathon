@@ -34,7 +34,6 @@ import type { RunHistoryEntry, RunMode } from "@/lib/types";
 
 type TypeFilter = "all" | "normal" | "compare";
 type QualityFilter = "all" | "high" | "medium" | "low" | "unknown";
-type SourceFilter = "all" | "db" | "live";
 type SortKey = "newest" | "oldest" | "quality_desc" | "quality_asc" | "name_asc" | "mode";
 
 const MODE_TONE: Record<RunMode, Tone> = {
@@ -196,7 +195,6 @@ export default function HistoryPage() {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [qualityFilter, setQualityFilter] = useState<QualityFilter>("all");
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("newest");
 
   // Selection state
@@ -218,7 +216,7 @@ export default function HistoryPage() {
       });
       qc.invalidateQueries({ queryKey: ["runs"] });
       qc.invalidateQueries({ queryKey: ["run-history"] });
-      router.push(`/run/${data.run_id}/compare`);
+      router.push(`/run/${data.run_id}`);
     },
   });
 
@@ -304,7 +302,6 @@ export default function HistoryPage() {
         if (normalizedQuery && !haystack.includes(normalizedQuery)) return false;
         if (typeFilter !== "all" && analysisType(run.mode) !== typeFilter) return false;
         if (qualityFilter !== "all" && qualityBucket(run.data_quality) !== qualityFilter) return false;
-        if (sourceFilter !== "all" && run.source !== sourceFilter) return false;
         return true;
       })
       .sort((a, b) => {
@@ -317,20 +314,18 @@ export default function HistoryPage() {
         if (sortKey === "mode") return modeLabel(a.mode).localeCompare(modeLabel(b.mode));
         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
       });
-  }, [qualityFilter, query, runs, sortKey, sourceFilter, typeFilter]);
+  }, [qualityFilter, query, runs, sortKey, typeFilter]);
 
   const hasFilters =
     query ||
     typeFilter !== "all" ||
     qualityFilter !== "all" ||
-    sourceFilter !== "all" ||
     sortKey !== "newest";
 
   function clearFilters() {
     setQuery("");
     setTypeFilter("all");
     setQualityFilter("all");
-    setSourceFilter("all");
     setSortKey("newest");
   }
 
@@ -449,16 +444,6 @@ export default function HistoryPage() {
               <SlidersHorizontal className="h-3.5 w-3.5" />
               Showing {filtered.length} of {runs.length}
             </span>
-            <Select
-              label="Source"
-              value={sourceFilter}
-              onChange={(value) => setSourceFilter(value as SourceFilter)}
-              compact
-            >
-              <option value="all">All sources</option>
-              <option value="db">Database</option>
-              <option value="live">Live session</option>
-            </Select>
             {hasFilters && (
               <button
                 onClick={clearFilters}

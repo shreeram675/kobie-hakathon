@@ -168,20 +168,54 @@ DDL = (
 
 
 def connect(path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
+    # check_same_thread=True (the default) on purpose: a sqlite3.Connection is
+    # not safe for concurrent use from multiple threads. Cross-thread callers
+    # (FastAPI threadpool + pipeline threads) must go through
+    # ThreadLocalConnection, which hands each thread its own connection; WAL
+    # mode makes multi-connection access to the same file safe.
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
-def checkpoint(conn: sqlite3.Connection) -> None:
+class ThreadLocalConnection:
+    """Connection facade that lazily opens one real connection per thread.
+
+    Drop-in for the module's helper functions: any attribute access
+    (execute, executemany, commit, …) is delegated to the calling thread's
+    own sqlite3.Connection. Writes are still serialized by _WRITE_LOCK in
+    the helpers, matching SQLite's single-writer model.
+    """
+
+    def __init__(self, path: Path | str = DEFAULT_DB_PATH) -> None:
+        self._path = path
+        self._local = threading.local()
+
+    def _connection(self) -> sqlite3.Connection:
+        conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = connect(self._path)
+            self._local.conn = conn
+        return conn
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._connection(), name)
+
+
+# Accepted by every helper below: a raw connection (tests, single-threaded
+# scripts) or the thread-local facade (server).
+DBConnection = sqlite3.Connection | ThreadLocalConnection
+
+
+def checkpoint(conn: DBConnection) -> None:
     """Merge the WAL into the main DB file so data survives loss of -wal/-shm."""
     with _WRITE_LOCK:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
 
-def migrate(conn: sqlite3.Connection) -> None:
+def migrate(conn: DBConnection) -> None:
     with _WRITE_LOCK:
         # Migrate run_snapshots if it exists with the old schema (keyed by run_id, not program_name_normalized)
         snapshot_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_snapshots)").fetchall()}
@@ -201,7 +235,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 
 def upsert_run(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     state: dict[str, Any],
     status: str = "initialized",
     run_state_json: str | None = None,
@@ -239,16 +273,22 @@ def upsert_run(
             pass
 
 
-def list_runs(conn: sqlite3.Connection, limit: int = 200) -> list[dict]:
-    """Return persisted run summaries ordered by most recent first."""
+def list_runs(conn: DBConnection, limit: int = 200) -> list[dict]:
+    """Return persisted run summaries ordered by most recent first.
+
+    Deliberately excludes run_state_json: full states can reach tens of MB
+    each and this list backs a polled history endpoint. Use find_run() for
+    a single run's full state.
+    """
     rows = conn.execute(
-        f"SELECT run_id, mode, user_input, program_name, status, data_quality, run_state_json, created_at, updated_at "
-        f"FROM runs ORDER BY created_at DESC LIMIT {int(limit)}"
+        "SELECT run_id, mode, user_input, program_name, status, data_quality, created_at, updated_at "
+        "FROM runs ORDER BY created_at DESC LIMIT ?",
+        (int(limit),),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def find_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
+def find_run(conn: DBConnection, run_id: str) -> dict | None:
     """Return a persisted run row by id, including any serialized state payload."""
     row = conn.execute(
         "SELECT run_id, mode, user_input, program_name, status, data_quality, run_state_json, created_at, updated_at "
@@ -258,7 +298,7 @@ def find_run(conn: sqlite3.Connection, run_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def upsert_identity(conn: sqlite3.Connection, identity: ProgramIdentity) -> None:
+def upsert_identity(conn: DBConnection, identity: ProgramIdentity) -> None:
     data = identity.model_dump()
     with _WRITE_LOCK:
         conn.execute(
@@ -281,7 +321,7 @@ def upsert_identity(conn: sqlite3.Connection, identity: ProgramIdentity) -> None
         conn.commit()
 
 
-def insert_claims(conn: sqlite3.Connection, claims: list[Claim]) -> None:
+def insert_claims(conn: DBConnection, claims: list[Claim]) -> None:
     rows = [
         {
             **claim.model_dump(),
@@ -303,7 +343,7 @@ def insert_claims(conn: sqlite3.Connection, claims: list[Claim]) -> None:
         conn.commit()
 
 
-def upsert_raw_documents(conn: sqlite3.Connection, documents: list[RawDocument]) -> None:
+def upsert_raw_documents(conn: DBConnection, documents: list[RawDocument]) -> None:
     """Persist raw Firecrawl documents idempotently by URL hash."""
 
     rows = [
@@ -337,7 +377,7 @@ def upsert_raw_documents(conn: sqlite3.Connection, documents: list[RawDocument])
 
 
 def save_program_snapshot(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     program_name: str,
     brand: str | None,
     country_or_region: str | None,
@@ -370,7 +410,7 @@ def save_program_snapshot(
             pass
 
 
-def find_program_snapshot(conn: sqlite3.Connection, query: str) -> dict | None:
+def find_program_snapshot(conn: DBConnection, query: str) -> dict | None:
     """Return the most-recent snapshot row for a program query, or None.
 
     Matching order: exact normalised name → stored name contains query → query words all appear in stored name.
@@ -404,7 +444,7 @@ def find_program_snapshot(conn: sqlite3.Connection, query: str) -> dict | None:
     return None
 
 
-def list_program_snapshots(conn: sqlite3.Connection, limit: int = 100) -> list[dict]:
+def list_program_snapshots(conn: DBConnection, limit: int = 100) -> list[dict]:
     """Return all stored snapshots ordered by most recent first."""
     rows = conn.execute(
         "SELECT program_name, brand, country_or_region, program_state_json, created_at "
@@ -414,7 +454,29 @@ def list_program_snapshots(conn: sqlite3.Connection, limit: int = 100) -> list[d
     return [dict(r) for r in rows]
 
 
-def find_program_snapshot_by_run_id(conn: sqlite3.Connection, run_id: str) -> dict | None:
+def list_program_snapshot_summaries(conn: DBConnection, limit: int = 100) -> list[dict]:
+    """Return snapshot metadata for the history list without loading the state blobs.
+
+    Extracts the handful of summary fields in SQL (json_extract) so listing
+    100 snapshots reads a few KB instead of parsing tens of MB of JSON in
+    Python on every history poll.
+    """
+    rows = conn.execute(
+        """
+        SELECT program_name, brand, created_at,
+               json_extract(program_state_json, '$.run_id')       AS run_id,
+               json_extract(program_state_json, '$.user_input')   AS user_input,
+               json_extract(program_state_json, '$.mode')         AS mode,
+               json_extract(program_state_json, '$.data_quality') AS data_quality,
+               json_extract(program_state_json, '$.status')       AS status
+        FROM run_snapshots ORDER BY created_at DESC LIMIT ?
+        """,
+        (int(limit),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def find_program_snapshot_by_run_id(conn: DBConnection, run_id: str) -> dict | None:
     """Return a stored program snapshot containing the requested run id."""
     rows = conn.execute(
         "SELECT * FROM run_snapshots WHERE program_state_json LIKE ? ORDER BY created_at DESC",
@@ -431,7 +493,7 @@ def find_program_snapshot_by_run_id(conn: sqlite3.Connection, run_id: str) -> di
     return None
 
 
-def delete_run(conn: sqlite3.Connection, run_id: str) -> bool:
+def delete_run(conn: DBConnection, run_id: str) -> bool:
     """Delete a run and its associated claims, conflicts, briefs, and conversations. Returns True if deleted."""
     with _WRITE_LOCK:
         conn.execute("DELETE FROM claims WHERE run_id = ?", (run_id,))
@@ -443,7 +505,7 @@ def delete_run(conn: sqlite3.Connection, run_id: str) -> bool:
     return cursor.rowcount > 0
 
 
-def delete_run_snapshot(conn: sqlite3.Connection, program_name_normalized: str) -> bool:
+def delete_run_snapshot(conn: DBConnection, program_name_normalized: str) -> bool:
     """Delete a run_snapshot by normalized program name. Returns True if deleted."""
     with _WRITE_LOCK:
         cursor = conn.execute(
@@ -454,7 +516,7 @@ def delete_run_snapshot(conn: sqlite3.Connection, program_name_normalized: str) 
     return cursor.rowcount > 0
 
 
-def list_program_snapshots_by_run_id(conn: sqlite3.Connection, run_id: str) -> list[dict]:
+def list_program_snapshots_by_run_id(conn: DBConnection, run_id: str) -> list[dict]:
     """Return all stored snapshots whose serialized state references the given run id."""
     rows = conn.execute(
         "SELECT * FROM run_snapshots WHERE program_state_json LIKE ? ORDER BY created_at ASC",
@@ -472,7 +534,7 @@ def list_program_snapshots_by_run_id(conn: sqlite3.Connection, run_id: str) -> l
     return result
 
 
-def upsert_normalized_packets(conn: sqlite3.Connection, packets: list[NormalizedObjectPacket]) -> None:
+def upsert_normalized_packets(conn: DBConnection, packets: list[NormalizedObjectPacket]) -> None:
     """Persist normalized extraction packets idempotently."""
 
     rows = [

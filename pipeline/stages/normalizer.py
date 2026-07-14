@@ -87,22 +87,29 @@ def generate_identity_hash(packet: ExtractedObjectPacket, schema_config: SchemaC
 
     payload = {
         "object_type": packet.object_type.strip().lower(),
-        "identity": identity_values,
+        # Fold case so the same identity extracted with different casing
+        # ("SkyMiles" vs "skymiles") still groups into one object.
+        "identity": _fold_case(identity_values),
     }
     serialized = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
     return sha256(serialized.encode("utf-8")).hexdigest()[:24]
 
 
 def _normalize_scope(scope: dict[str, Any]) -> dict[str, Any]:
-    return {str(key).strip().lower(): _normalize_value(value) for key, value in scope.items()}
+    return {str(key).strip().lower(): _fold_case(_normalize_value(value)) for key, value in scope.items()}
 
 
 def _normalize_value(value: Any) -> Any:
+    """Normalize a stored value while preserving its original casing for display.
+
+    Case-insensitive comparison happens downstream via folded keys (dedup,
+    identity hashes, adjudication equivalence) — never on the stored value.
+    """
     if isinstance(value, str):
         stripped = value.strip()
         if NUMERIC_RE.fullmatch(stripped):
             return float(stripped) if "." in stripped else int(stripped)
-        return stripped.lower()
+        return stripped
     if isinstance(value, list):
         normalized = [_normalize_value(item) for item in value]
         deduped = {_stable_key(item): item for item in normalized}
@@ -112,8 +119,22 @@ def _normalize_value(value: Any) -> Any:
     return value
 
 
+_TRADEMARK_CHARS_RE = re.compile(r"[™®©]")
+
+
+def _fold_case(value: Any) -> Any:
+    """Lowercase strings recursively — for hash/dedup keys only, never display."""
+    if isinstance(value, str):
+        return _TRADEMARK_CHARS_RE.sub("", value).strip().lower()
+    if isinstance(value, list):
+        return [_fold_case(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _fold_case(item) for key, item in value.items()}
+    return value
+
+
 def _stable_key(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=True, default=str)
+    return json.dumps(_fold_case(value), sort_keys=True, ensure_ascii=True, default=str)
 
 
 def _validate_extracted_field(field_name: str, field: ExtractedField) -> ExtractedField:

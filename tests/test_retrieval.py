@@ -1,6 +1,6 @@
-from pipeline.stages.retrieval import canonicalize_url, retrieve_urls
+from pipeline.stages.retrieval import canonicalize_url, domain_penalize_urls, retrieve_urls
 from pipeline.stages.retrieval import TavilyRestClient
-from core.schemas import SearchQuery
+from core.schemas import RetrievedUrl, SearchQuery
 from unittest.mock import patch
 
 import pytest
@@ -68,3 +68,54 @@ def test_tavily_client_reports_dns_or_network_failure(monkeypatch):
         with patch("pipeline.stages.retrieval.time.sleep"):
             with pytest.raises(RuntimeError, match="could not reach api.tavily.com"):
                 client.search("Example Rewards terms")
+
+
+def _url(source_type: str, url: str, score: float = 0.9, title: str = "") -> RetrievedUrl:
+    return RetrievedUrl(
+        url=url, canonical_url=url, title=title, score=score,
+        query="q", source_type=source_type,
+    )
+
+
+def test_domain_penalize_demotes_third_party_page_mistagged_official():
+    # retrieve_urls tags every result from an "official" query with source_type
+    # "official" regardless of which site Tavily actually returned — a
+    # third-party SEO guide inherits the same recency-filter bypass as the
+    # brand's own page. domain_penalize_urls must claw that trust back when
+    # official_domain is known.
+    urls = [
+        _url("official", "https://loyaltyrewardco.com/the-ultimate-guide-to-amc-stubs", score=0.93),
+        _url("official", "https://www.amctheatres.com/faqs/amc-stubs", score=0.85),
+    ]
+
+    result = domain_penalize_urls(
+        urls, program_domain="Entertainment", program_name="AMC Stubs",
+        brand="AMC Theatres", official_domain="amctheatres.com",
+    )
+
+    assert result[0].url == "https://www.amctheatres.com/faqs/amc-stubs"
+    third_party = next(u for u in result if "loyaltyrewardco" in u.url)
+    assert third_party.score == pytest.approx(0.93 * 0.5)
+
+
+def test_domain_penalize_keeps_official_subdomain_at_full_score():
+    urls = [_url("official", "https://about.starbucks.com/press/reimagined-rewards", score=0.87)]
+
+    result = domain_penalize_urls(
+        urls, program_domain="Food & Beverage", program_name="Starbucks Rewards",
+        brand="Starbucks", official_domain="starbucks.com",
+    )
+
+    assert result[0].score == 0.87
+
+
+def test_domain_penalize_without_official_domain_is_unchanged():
+    # No official_domain known (LLM was unsure) — behavior must be identical
+    # to before the fix, not a false-positive penalty.
+    urls = [_url("official", "https://loyaltyrewardco.com/the-ultimate-guide-to-amc-stubs", score=0.93)]
+
+    result = domain_penalize_urls(
+        urls, program_domain="Entertainment", program_name="AMC Stubs", brand="AMC Theatres",
+    )
+
+    assert result[0].score == 0.93

@@ -23,6 +23,7 @@ def test_llm_resolved_output_builds_identity():
                 "confidence": 0.95,
             }
         ),
+        corroborator=lambda name: True,
     )
 
     assert result.status == "resolved"
@@ -112,6 +113,7 @@ def test_rejected_output_stays_rejected():
 
 
 def test_synthetic_rewards_hallucination_is_rejected():
+    # Corroboration unavailable (returns None) → heuristic fallback still rejects.
     result = validate_input(
         "cockroach janata party",
         chat_client=FakeChatClient(
@@ -124,10 +126,96 @@ def test_synthetic_rewards_hallucination_is_rejected():
                 "confidence": 0.95,
             }
         ),
+        corroborator=lambda name: None,
     )
 
     assert result.status == "rejected"
     assert result.identity is None
+
+
+def test_verbatim_fictional_input_rejected_when_uncorroborated():
+    # Regression: when the user types the hallucinated name verbatim
+    # ("cockroach rewards"), the old heuristic guard passed it through.
+    # A failed corroboration search must reject it.
+    result = validate_input(
+        "cockroach rewards",
+        chat_client=FakeChatClient(
+            {
+                "status": "resolved",
+                "program_name": "Cockroach Rewards",
+                "brand": "Cockroach",
+                "domain": "Food & Beverage",
+                "country_or_region": "United States",
+                "confidence": 0.95,
+                "official_domain": "cockroachrewards.com",
+            }
+        ),
+        corroborator=lambda name: False,
+    )
+
+    assert result.status == "rejected"
+    assert result.identity is None
+
+
+def test_generic_suffix_program_resolves_when_corroborated():
+    seen: list[str] = []
+
+    def corroborator(name: str) -> bool:
+        seen.append(name)
+        return True
+
+    result = validate_input(
+        "best buy rewards",
+        chat_client=FakeChatClient(
+            {
+                "status": "resolved",
+                "program_name": "My Best Buy Rewards",
+                "brand": "Best Buy",
+                "domain": "Retail",
+                "country_or_region": "United States",
+                "confidence": 0.97,
+            }
+        ),
+        corroborator=corroborator,
+    )
+
+    assert result.status == "resolved"
+    assert result.identity is not None
+    assert seen == ["My Best Buy Rewards"]
+
+
+def test_distinctive_program_name_skips_corroboration():
+    def corroborator(name: str) -> bool:
+        raise AssertionError("corroboration should not run for distinctive names")
+
+    result = validate_input(
+        "Marriott Bonvoy",
+        chat_client=FakeChatClient(
+            {
+                "status": "resolved",
+                "program_name": "Marriott Bonvoy",
+                "brand": "Marriott",
+                "domain": "Hotel",
+                "country_or_region": "Global",
+                "confidence": 0.99,
+            }
+        ),
+        corroborator=corroborator,
+    )
+
+    assert result.status == "resolved"
+
+
+def test_verifier_failure_returns_friendly_reason():
+    class ExplodingChatClient:
+        def complete_json(self, messages):
+            raise RuntimeError("429 Client Error: Too Many Requests for url: https://api.groq.com/...")
+
+    result = validate_input("Marriott Bonvoy", chat_client=ExplodingChatClient())
+
+    assert result.status == "needs_clarification"
+    assert "429" not in (result.reason or "")
+    assert "temporarily unavailable" in (result.reason or "")
 
 
 def test_synthetic_possible_match_is_filtered_and_rejected_for_fake_input():

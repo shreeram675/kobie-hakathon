@@ -199,11 +199,13 @@ def retrieval_node(state: AgentState) -> dict:
             "updated_at": now_iso(),
         }
 
+    identity = state.get("program_identity")
     filtered_urls = domain_penalize_urls(
         retrieval_result.urls,
         program_domain=state.get("domain") or "",
         program_name=state.get("program_name") or "",
         brand=state.get("brand") or "",
+        official_domain=identity.official_domain if identity else None,
     )
     retrieval_result = retrieval_result.model_copy(update={
         "urls": filtered_urls,

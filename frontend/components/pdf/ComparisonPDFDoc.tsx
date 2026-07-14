@@ -418,7 +418,7 @@ function BriefSection({ brief, programs }: { brief: ComparisonBrief; programs: s
       {/* Key differentiators — subheader anchored to first row */}
       {brief.key_differentiators.length > 0 && (
         <View>
-          <View style={{ borderWidth: 0.5, borderColor: C.line, borderRadius: 5, overflow: 'hidden' }}>
+          <View style={{ borderWidth: 0.5, borderColor: C.line, borderRadius: 5 }}>
             {/* subheader + first diff row together */}
             <View wrap={false}>
               <View style={{ backgroundColor: C.softGrey, paddingTop: 6, paddingBottom: 6, paddingLeft: 4, paddingRight: 4, borderBottomWidth: 0.5, borderBottomColor: C.line }}>

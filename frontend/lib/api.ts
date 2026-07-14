@@ -26,8 +26,14 @@ export async function createRun(body: CreateRunBody): Promise<CreateRunResponse>
   return asJson<CreateRunResponse>(res);
 }
 
-export async function fetchRun(runId: string): Promise<AgentState> {
-  const res = await fetch(`/api/run/${runId}`, { cache: "no-store" });
+export async function fetchRun(
+  runId: string,
+  opts?: { full?: boolean },
+): Promise<AgentState> {
+  // Default (polling) responses carry evidence previews only; pass
+  // { full: true } to load complete scraped content and chunk text.
+  const qs = opts?.full ? "?full=true" : "";
+  const res = await fetch(`/api/run/${runId}${qs}`, { cache: "no-store" });
   return asJson<AgentState>(res);
 }
 
@@ -91,6 +97,11 @@ export async function postClarify(
     body: JSON.stringify({ answer }),
   });
   return asJson<{ ok: boolean }>(res);
+}
+
+export async function fetchRunExport(runId: string): Promise<Record<string, unknown>> {
+  const res = await fetch(`/api/run/${runId}/export`, { cache: "no-store" });
+  return asJson(res);
 }
 
 export async function postCacheDecision(

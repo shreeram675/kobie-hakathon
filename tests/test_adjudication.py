@@ -162,7 +162,10 @@ def test_adjudicator_auto_resolves_large_score_gap(monkeypatch):
 
     monkeypatch.setattr(conflict_adjudicator, "run_debate", _no_debate)
 
+    # "earn_rate_base" routes through the "range" strategy, so use a
+    # single-truth debate field — the gap check only applies to those.
     conflict = ba_conflict()
+    conflict["field_name"] = "point_value_cpp"
     conflict["claim_a"]["confidence"] = 0.95
     conflict["claim_b"]["confidence"] = 0.50
     state = build_initial_state("Any Program")
@@ -176,6 +179,68 @@ def test_adjudicator_auto_resolves_large_score_gap(monkeypatch):
     assert entry["winner"] == "A"
     assert entry["value"] == "1.5 Avios per pound"
     assert entry["confidence"] == 0.95
+
+
+def test_adjudicator_union_field_merges_despite_confidence_gap(monkeypatch):
+    async def _no_debate(conflict, use_rebuttal=True):
+        raise AssertionError("Union fields must never reach the debate engine")
+
+    monkeypatch.setattr(conflict_adjudicator, "run_debate", _no_debate)
+
+    conflict = {
+        "field_name": "partnerships.partner_names",
+        "volatility": "HIGH",
+        "claim_a": {
+            "value": "Emirates, Qatar Airways",
+            "source_url": "https://official.example/partners",
+            "date": date(2025, 3, 1),
+            "authority": "official",
+            "corroboration": 1,
+            "confidence": 0.95,
+        },
+        "claim_b": {
+            "value": "Delta",
+            "source_url": "https://blog.example/partners",
+            "date": date(2025, 4, 15),
+            "authority": "aggregator",
+            "corroboration": 1,
+            "confidence": 0.50,
+        },
+    }
+    state = build_initial_state("Any Program")
+    state["conflicts"] = [conflict]
+
+    updated = adjudicator_node(state)
+
+    assert len(updated["adjudicated"]) == 1
+    entry = updated["adjudicated"][0]
+    assert entry["winner"] == "MERGE"
+    assert entry["strategy"] == "union"
+    # The low-confidence source's partners must not be discarded by the gap check.
+    assert "Emirates, Qatar Airways" in entry["value"]
+    assert "Delta" in entry["value"]
+
+
+def test_adjudicator_auto_resolves_numeric_equivalent_values(monkeypatch):
+    async def _no_debate(conflict, use_rebuttal=True):
+        raise AssertionError("Equivalent values must not be debated")
+
+    monkeypatch.setattr(conflict_adjudicator, "run_debate", _no_debate)
+
+    conflict = ba_conflict()
+    conflict["field_name"] = "point_value_cpp"
+    conflict["claim_a"]["value"] = "1.50 cents per point"
+    conflict["claim_b"]["value"] = "1.5 Cents per point"
+
+    state = build_initial_state("Any Program")
+    state["conflicts"] = [conflict]
+
+    updated = adjudicator_node(state)
+
+    assert len(updated["adjudicated"]) == 1
+    entry = updated["adjudicated"][0]
+    assert entry["resolution"] == "auto"
+    assert "agree" in entry["reasoning"]
 
 
 def test_adjudicator_flags_unresolvable_debate(monkeypatch):
@@ -275,6 +340,54 @@ def test_detect_conflicts_builds_debate_ready_claims():
     assert conflict["claim_b"]["date"] == date(2026, 6, 12)
 
 
+def test_detect_conflicts_carries_all_value_groups():
+    field = "burn_mechanics.point_value_cpp"
+    packets = [
+        packet("c1", "https://official.example/value", field, "1.5 cents", 0.9),
+        packet("c2", "https://blog.example/value", field, "1.2 cents", 0.7),
+        packet("c3", "https://forum.example/value", field, "0.8 cents", 0.5),
+    ]
+    documents = [
+        raw_document("https://official.example/value", "official"),
+        raw_document("https://blog.example/value", "review"),
+        raw_document("https://forum.example/value", "forum"),
+    ]
+
+    conflicts = detect_conflicts_from_packets(packets, documents)
+
+    assert len(conflicts) == 1
+    all_claims = conflicts[0]["all_claims"]
+    assert len(all_claims) == 3
+    assert {claim["value"] for claim in all_claims} == {"1.5 cents", "1.2 cents", "0.8 cents"}
+
+
+def test_adjudicator_union_merges_all_value_groups(monkeypatch):
+    async def _no_debate(conflict, use_rebuttal=True):
+        raise AssertionError("Union fields must never reach the debate engine")
+
+    monkeypatch.setattr(conflict_adjudicator, "run_debate", _no_debate)
+
+    field = "partnerships.partner_names"
+    packets = [
+        packet("c1", "https://official.example/partners", field, "Emirates", 0.9),
+        packet("c2", "https://blog.example/partners", field, "Qatar Airways", 0.7),
+        packet("c3", "https://forum.example/partners", field, "Delta", 0.5),
+    ]
+    state = build_initial_state("Any Program")
+    state["normalized_packets"] = packets
+    state["conflicts"] = []
+
+    updated = adjudicator_node(state)
+
+    assert len(updated["adjudicated"]) == 1
+    entry = updated["adjudicated"][0]
+    assert entry["winner"] == "MERGE"
+    # All three sources' partners survive, including the third-ranked one.
+    for partner in ("Emirates", "Qatar Airways", "Delta"):
+        assert partner in entry["value"]
+    assert len(entry["all_values"]) == 3
+
+
 def test_detect_conflicts_ignores_agreeing_sources():
     field = "program_basics.program_name"
     packets = [
@@ -346,3 +459,37 @@ def test_apply_adjudication_updates_field_report():
     assert updated.extracted_count == 1
     assert updated.ambiguous_count == 0
     assert updated.flagged_count == 1
+
+
+def test_union_dedupes_trademark_and_case_variants(monkeypatch):
+    async def _no_debate(conflict, use_rebuttal=True):
+        raise AssertionError("Union fields must never reach the debate engine")
+
+    monkeypatch.setattr(conflict_adjudicator, "run_debate", _no_debate)
+
+    field = "tier_system.tier_names"
+    packets = [
+        packet("c1", "https://official.example/tiers", field, ["My Best Buy Plus", "My Best Buy Total™"], 0.9),
+        packet("c2", "https://blog.example/tiers", field, ["my best buy plus™", "My Best Buy Total"], 0.7),
+    ]
+    state = build_initial_state("Any Program")
+    state["normalized_packets"] = packets
+    state["conflicts"] = []
+
+    updated = adjudicator_node(state)
+
+    assert len(updated["adjudicated"]) == 1
+    entry = updated["adjudicated"][0]
+    # Case/trademark variants collapse to one item each, flattened out of lists
+    # (no Python repr brackets in the merged value).
+    assert entry["value"] == "My Best Buy Plus, My Best Buy Total™"
+
+
+def test_detect_conflicts_treats_case_variants_as_agreement():
+    field = "program_basics.program_name"
+    packets = [
+        packet("c1", "https://a.example", field, "Acme Rewards", 0.9),
+        packet("c2", "https://b.example", field, "acme rewards", 0.8),
+    ]
+
+    assert detect_conflicts_from_packets(packets, []) == []

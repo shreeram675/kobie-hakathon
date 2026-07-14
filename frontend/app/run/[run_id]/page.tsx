@@ -32,6 +32,7 @@ import { CacheDecisionModal } from "@/components/CacheDecisionModal";
 import { ProgramQueuePanel } from "@/components/ProgramQueuePanel";
 import { useRun, useStopRun, useRetryRun, useCacheDecision } from "@/lib/hooks";
 import { DownloadPDFButton } from "@/components/DownloadPDFButton";
+import { DownloadJSONButton } from "@/components/DownloadJSONButton";
 import { STAGE_IDS, PIPELINE_STAGES, type StageId } from "@/lib/schema";
 import { cn, elapsed } from "@/lib/format";
 import type { AgentState, CostReport, RunMode } from "@/lib/types";
@@ -166,25 +167,60 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
       : null;
   const displayState = selectedDoneState ?? state;
 
+  const secondaryBtnCls =
+    "h-9 gap-1.5 border border-white/10 px-3 text-xs font-medium text-white/80 hover:border-white/20 hover:bg-white/10 hover:text-white";
+
   return (
     <div className="flex h-screen flex-col bg-canvas">
       <Topbar>
+        <div className="flex items-center gap-1.5">
+          {isComparison && state.status === "done" && (
+            <>
+              <DownloadJSONButton
+                runId={runId}
+                programName={state.program_name}
+                variant="ghost"
+                className={secondaryBtnCls}
+              />
+              <DownloadPDFButton
+                state={state}
+                variant="compare"
+                buttonVariant="ghost"
+                className={secondaryBtnCls}
+              />
+            </>
+          )}
+          {!isComparison && state.status === "done" && (
+            <>
+              <DownloadJSONButton
+                runId={runId}
+                programName={state.program_name ?? state.user_input}
+                variant="ghost"
+                className={secondaryBtnCls}
+              />
+              <DownloadPDFButton
+                state={state}
+                variant="single"
+                buttonVariant="ghost"
+                className={secondaryBtnCls}
+              />
+            </>
+          )}
+          <Link href="/history">
+            <Button size="sm" variant="ghost" className={secondaryBtnCls}>
+              <History className="h-3.5 w-3.5" /> History
+            </Button>
+          </Link>
+        </div>
+
+        <div className="mx-2.5 h-5 w-px bg-white/10" />
+
         {isComparison && state.status === "done" && (
-          <>
-            <DownloadPDFButton state={state} variant="compare" />
-            <Link href={`/run/${runId}/compare`}>
-              <Button
-                size="sm"
-                variant="secondary"
-                className="bg-kobie-orange text-white shadow-sm hover:bg-kobie-orange/90"
-              >
-                <GitCompareArrows className="h-4 w-4" /> View comparison
-              </Button>
-            </Link>
-          </>
-        )}
-        {!isComparison && state.status === "done" && (
-          <DownloadPDFButton state={state} variant="single" />
+          <Link href={`/run/${runId}/compare`}>
+            <Button size="sm" variant="primary" className="h-9 gap-1.5 px-4 text-xs font-semibold">
+              <GitCompareArrows className="h-3.5 w-3.5" /> View comparison
+            </Button>
+          </Link>
         )}
         {(state.status === "running" || state.status === "clarification_needed") && (
           <Button
@@ -192,12 +228,12 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
             variant="outline"
             onClick={() => stop.mutate()}
             disabled={stop.isPending}
-            className="border-red/40 text-red hover:bg-red/10 hover:border-red/60 transition-all"
+            className="h-9 gap-1.5 border-red/40 px-3 text-xs font-medium text-red transition-all hover:border-red/60 hover:bg-red/10"
           >
             {stop.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Square className="h-4 w-4 fill-current" />
+              <Square className="h-3.5 w-3.5 fill-current" />
             )}
             {stop.isPending ? "Stopping…" : "Stop"}
           </Button>
@@ -214,25 +250,22 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
               retry.mutate(body);
             }}
             disabled={retry.isPending}
-            className="border-teal/40 text-teal hover:bg-teal/10 hover:border-teal/60 transition-all"
+            className="h-9 gap-1.5 border-teal/40 px-3 text-xs font-medium text-teal transition-all hover:border-teal/60 hover:bg-teal/10"
           >
             {retry.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <RotateCcw className="h-4 w-4" />
+              <RotateCcw className="h-3.5 w-3.5" />
             )}
             Retry
           </Button>
         )}
-        <Link href="/history">
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
-            <History className="h-4 w-4" /> History
-          </Button>
-        </Link>
-        <Link href="/">
-          <Button size="sm" variant="outline">
-            <ArrowLeft className="h-4 w-4" /> New analysis
-          </Button>
+
+        <Link
+          href="/"
+          className="ml-2.5 flex items-center gap-1 text-xs font-medium text-white/50 transition-colors hover:text-white"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> New analysis
         </Link>
       </Topbar>
 
@@ -922,7 +955,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-canvas">
       <Topbar>
         <Link href="/history">
-          <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
+          <Button size="sm" variant="ghost" className="border border-white/25 bg-white/10 text-white hover:bg-white/20">
             <History className="h-4 w-4" /> History
           </Button>
         </Link>

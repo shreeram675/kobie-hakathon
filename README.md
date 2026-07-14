@@ -99,7 +99,6 @@ The frontend (Next.js) is a thin client: it calls the FastAPI backend directly f
 |---|---|
 | Orchestration | LangGraph (Python) |
 | Backend API | FastAPI + Uvicorn |
-| Legacy/alt UI | Streamlit (`app.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript |
 | Styling/UI | Tailwind CSS, Recharts, ReactFlow (pipeline graph), Lucide icons |
 | PDF export | `@react-pdf/renderer` |
@@ -202,8 +201,6 @@ uvicorn server:app --host 127.0.0.1 --port 8000 --reload
 cd frontend && npm run dev
 ```
 
-A legacy Streamlit UI also exists at `app.py` (`streamlit run app.py`) from an earlier iteration of the project; the FastAPI + Next.js stack above is the current, actively developed interface.
-
 ### Running Tests
 
 ```bash
@@ -245,7 +242,6 @@ The Next.js frontend proxies these through its own route handlers under `fronten
 ```
 kobi-hakathon/
 ├── server.py               # FastAPI backend, all API routes
-├── app.py                  # Legacy Streamlit UI (earlier iteration)
 ├── server.sh                # Start/stop/restart script for backend + frontend
 ├── requirements.txt          # Python dependencies
 ├── .env.example              # Environment variable template

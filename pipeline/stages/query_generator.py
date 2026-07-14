@@ -113,10 +113,12 @@ For each schema group, here is the source type and page type most likely to cont
                                   "valuation"   — CPP / point value analysis articles
   Group D (tier_system)         → "official"    — single page listing ALL membership tiers
   Group E (partnerships)        → "partners"    — partner list or transfer partner overview
-  Group F (digital_experience)  → SKIP — app_ratings are fetched directly from store APIs;
-                                  do NOT generate any "app_reviews" queries. Generate a query
-                                  only if the program has notable personalization or gamification
-                                  features documented on its official site ("official" source_type).
+  Group F (digital_experience)  → "app_reviews"  — exactly one query as a web fallback for
+                                  app_ratings/mobile_app_available (store APIs are tried first;
+                                  this query backstops cases where the store lookup fails to match
+                                  the app). Add a second, "official"-typed query only if the program
+                                  has notable personalization or gamification features documented
+                                  on its official site.
   Group G (member_sentiment)    → "forums"      — Trustpilot, FlyerTalk (airline/hotel), expert blogs
   Group H (competitive_position)→ "competitors" — [program] vs [competitor] comparison articles
   Group A (membership_count)    → "financial"   — annual report or investor presentation
@@ -147,6 +149,13 @@ TIER QUERY
 PARTNERSHIP QUERY
 ✓ Exactly one query must target a partner list or transfer partner overview page.
   Use phrasing such as "[program] partners list" or "[program] earn burn partners".
+
+APP RATINGS QUERY
+✓ Exactly one query, source_type "app_reviews", must target app store rating pages for this program's
+  mobile app, e.g. "[program] app rating Google Play App Store" or "[program] mobile app reviews rating".
+  This is a fallback: ratings are fetched directly from store APIs first, but this query lets the
+  extractor recover the rating from web content if that direct lookup fails to find the app.
+✗ Do NOT omit this query even if you are confident the direct store-API fetch will succeed.
 
 FINANCIAL / MEMBERSHIP SCALE QUERY
 ✓ Use the corporate parent name (not program name) for investor / annual report queries.
@@ -329,8 +338,7 @@ VALIDATION RULES  (checked by the calling system — violations are rejected)
 - no placeholder text in any field
 - field_query_map must not be empty
 - at least one query must target: member_sentiment · competitive_position · membership_count ·
-  tier_names (all levels) · partner_names (full list)
-- do NOT generate "app_reviews" source_type queries — app_ratings are fetched directly via store APIs
+  tier_names (all levels) · partner_names (full list) · app_ratings (source_type "app_reviews")
 - no query may contain "reddit.com"
 - every source_type must be one of the 10 canonical values (lowercase)
 """.strip()
@@ -850,6 +858,12 @@ def _domain_query_templates(domain: str, geography: str) -> list[dict[str, Any]]
             "intent": "partner ecosystem",
             "target_fields": ["partnerships", "transfer_partners"],
             "source_type": "partners",
+        },
+        {
+            "suffix": "app rating Google Play App Store",
+            "intent": "mobile app rating web fallback",
+            "target_fields": ["app_ratings", "mobile_app"],
+            "source_type": "app_reviews",
         },
         {
             "suffix": "recent changes devaluation",

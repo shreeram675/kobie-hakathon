@@ -7,6 +7,7 @@ and are injected as a pre-built NormalizedObjectPacket in the ingest node.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any
@@ -58,35 +59,52 @@ def fetch_app_ratings(program_name: str, brand: str, country: str = "us") -> App
     """Return app ratings from Google Play and App Store for the given loyalty program."""
     result = AppRatingsResult()
 
-    query = f"{program_name} loyalty"
-    brand_query = f"{brand} loyalty"
+    # Bare-name fallbacks matter: store search often returns nothing (or pure
+    # junk) for "<brand> loyalty" while the bare brand finds the app directly.
+    queries = list(dict.fromkeys([f"{program_name} loyalty", f"{brand} loyalty", program_name, brand]))
+    match_query = f"{program_name} {brand}"
 
-    _fetch_play_store(result, query, brand_query, country)
-    _fetch_app_store(result, query, brand_query, country)
+    _fetch_play_store(result, queries, match_query, country)
+    _fetch_app_store(result, queries, match_query, country)
 
     return result
 
 
-def _fetch_play_store(result: AppRatingsResult, primary: str, fallback: str, country: str) -> None:
+def _fetch_play_store(result: AppRatingsResult, queries: list[str], match_query: str, country: str) -> None:
     try:
-        from google_play_scraper import search as gp_search  # type: ignore[import-untyped]
+        from google_play_scraper import app as gp_app  # type: ignore[import-untyped]
+        from google_play_scraper import search as gp_search
     except ImportError:
         result.errors.append("google-play-scraper not installed")
         return
 
-    for query in (primary, fallback):
+    for query in queries:
         try:
             hits = gp_search(query, lang="en", country=country, n_hits=3)
         except Exception as exc:
             result.errors.append(f"Play Store search error: {exc}")
             continue
 
-        hit = _best_hit(hits, primary)
+        hit = _best_hit(hits, match_query)
         if hit:
             result.play_store_score = hit.get("score")
-            result.play_store_ratings_count = hit.get("ratings")
             result.play_store_app_id = hit.get("appId")
             result.play_store_title = hit.get("title")
+            # The "featured" top card comes back with appId=None (stale parser
+            # in google-play-scraper); recover the id from the search page HTML.
+            if not result.play_store_app_id:
+                result.play_store_app_id = _resolve_featured_play_app_id(query, country)
+            # search() results carry no ratings count; only the detail endpoint does.
+            if result.play_store_app_id:
+                try:
+                    detail = gp_app(result.play_store_app_id, lang="en", country=country)
+                    result.play_store_ratings_count = detail.get("ratings")
+                    if detail.get("score") is not None:
+                        result.play_store_score = detail["score"]
+                    if detail.get("title"):
+                        result.play_store_title = detail["title"]
+                except Exception as exc:
+                    result.errors.append(f"Play Store detail error: {exc}")
             LOGGER.debug(
                 "Play Store: %s score=%.2f (%s ratings)",
                 result.play_store_title,
@@ -96,8 +114,8 @@ def _fetch_play_store(result: AppRatingsResult, primary: str, fallback: str, cou
             return
 
 
-def _fetch_app_store(result: AppRatingsResult, primary: str, fallback: str, country: str) -> None:
-    for query in (primary, fallback):
+def _fetch_app_store(result: AppRatingsResult, queries: list[str], match_query: str, country: str) -> None:
+    for query in queries:
         try:
             resp = http_requests.get(
                 _ITUNES_SEARCH_URL,
@@ -110,7 +128,7 @@ def _fetch_app_store(result: AppRatingsResult, primary: str, fallback: str, coun
             result.errors.append(f"App Store search error: {exc}")
             continue
 
-        hit = _best_hit(hits, primary, title_key="trackName", score_key="averageUserRating")
+        hit = _best_hit(hits, match_query, title_key="trackName", score_key="averageUserRating")
         if hit:
             result.app_store_score = hit.get("averageUserRating")
             result.app_store_ratings_count = hit.get("userRatingCount")
@@ -125,6 +143,25 @@ def _fetch_app_store(result: AppRatingsResult, primary: str, fallback: str, coun
             return
 
 
+def _resolve_featured_play_app_id(query: str, country: str) -> str | None:
+    """Scrape the first app id off the Play search page for a featured-card hit."""
+    try:
+        html = http_requests.get(
+            "https://play.google.com/store/search",
+            params={"q": query, "c": "apps", "hl": "en", "gl": country},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=_GP_TIMEOUT,
+        ).text
+        match = re.search(r"/store/apps/details\?id=([\w.]+)", html)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _tokens(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
 def _best_hit(
     hits: list[dict[str, Any]],
     query: str,
@@ -133,16 +170,15 @@ def _best_hit(
     score_key: str = "score",
 ) -> dict[str, Any] | None:
     """Return the hit whose title most closely matches the query, filtering junk scores."""
-    query_tokens = set(query.lower().split())
+    query_tokens = _tokens(query)
     best: dict[str, Any] | None = None
-    best_overlap = -1
+    best_overlap = 0
 
     for hit in hits:
         score = hit.get(score_key)
         if not score or score < 1.0:
             continue
-        title = str(hit.get(title_key) or "").lower()
-        overlap = len(query_tokens & set(title.split()))
+        overlap = len(query_tokens & _tokens(str(hit.get(title_key) or "")))
         if overlap > best_overlap:
             best_overlap = overlap
             best = hit
@@ -165,14 +201,14 @@ def build_app_ratings_packet(result: AppRatingsResult, program_name: str) -> dic
     chunk_id = sha256(f"app_ratings:{program_name}:{combined_rating}".encode()).hexdigest()[:16]
 
     fields: dict[str, ExtractedField] = {
-        "app_ratings": ExtractedField(
+        "digital_experience.app_ratings": ExtractedField(
             value=combined_rating,
             status="EXTRACTED",
             source_url=source_url,
             source_snippet=result.as_text(),
             confidence=0.95,
         ),
-        "mobile_app_available": ExtractedField(
+        "digital_experience.mobile_app_available": ExtractedField(
             value="yes",
             status="EXTRACTED",
             source_url=source_url,

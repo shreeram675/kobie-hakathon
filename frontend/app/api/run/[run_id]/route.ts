@@ -5,11 +5,15 @@ const BACKEND = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { run_id: string } },
 ) {
+  // Polling gets a slimmed payload by default; ?full=true forwards to the
+  // backend for the complete evidence (scraped page content, chunk text).
+  const full = new URL(request.url).searchParams.get("full");
+  const qs = full ? `?full=${full}` : "";
   try {
-    const res = await fetch(`${BACKEND}/api/run/${params.run_id}`, {
+    const res = await fetch(`${BACKEND}/api/run/${params.run_id}${qs}`, {
       cache: "no-store",
     });
     if (res.status === 404) {

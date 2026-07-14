@@ -108,7 +108,7 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col">
       <Topbar>
         <Link href="/history">
-          <Button size="sm" variant="ghost" className="text-white/75 hover:bg-white/10 hover:text-white">
+          <Button size="sm" variant="ghost" className="border border-white/25 bg-white/10 text-white hover:bg-white/20">
             <History className="h-4 w-4" />
             History
           </Button>

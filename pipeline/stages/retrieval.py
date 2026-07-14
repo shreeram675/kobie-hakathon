@@ -22,11 +22,27 @@ RESULTS_PER_QUERY = 3
 _STATIC_SOURCE_TYPES = frozenset({"official", "terms", "faq"})
 _RECENCY_DAYS = 365
 
+def _url_host(url: str) -> str:
+    host = urlsplit(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def _is_official_host(url: str, official_domain: str) -> bool:
+    host = _url_host(url)
+    official = official_domain.strip().lower()
+    if official.startswith(("http://", "https://")):
+        official = _url_host(official)
+    else:
+        official = official[4:] if official.startswith("www.") else official
+    return bool(official) and (host == official or host.endswith("." + official))
+
+
 def domain_penalize_urls(
     urls: list["RetrievedUrl"],
     program_domain: str,
     program_name: str = "",
     brand: str = "",
+    official_domain: str | None = None,
 ) -> list["RetrievedUrl"]:
     """Penalise retrieved URLs whose title gives no signal about the target program.
 
@@ -40,6 +56,16 @@ def domain_penalize_urls(
     Domain is kept as a parameter for future use but is not the primary filter,
     because programmes in the same domain (e.g. two airline programmes) can
     contaminate each other just as easily as cross-domain sources can.
+
+    "official" / "terms" / "faq" results are exempt from Tavily's recency filter
+    (see _STATIC_SOURCE_TYPES in retrieve_urls) on the assumption that they are
+    brand-owned pages that rarely go stale. That assumption only holds when the
+    result is actually hosted on the program's own domain — retrieve_urls tags
+    every result from a query with that query's source_type regardless of which
+    site Tavily actually returned, so third-party SEO guides and blogs routinely
+    inherit the "official" label too. When official_domain is known, penalize
+    same-tier results that don't resolve to it, since they got a recency-filter
+    pass they were never entitled to.
     """
     if not urls:
         return urls
@@ -55,6 +81,16 @@ def domain_penalize_urls(
 
     result = []
     for url in urls:
+        if (
+            official_domain
+            and url.source_type in _STATIC_SOURCE_TYPES
+            and not _is_official_host(url.url, official_domain)
+        ):
+            # Recency-exempt tier but not actually the brand's own domain —
+            # stronger penalty than the opinion-type mismatch below, since this
+            # result also skipped the 365-day freshness check entirely.
+            result.append(url.model_copy(update={"score": url.score * 0.5}))
+            continue
         if url.source_type not in opinion_types or not target_tokens:
             result.append(url)
             continue
