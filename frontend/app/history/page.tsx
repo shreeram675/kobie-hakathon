@@ -340,7 +340,7 @@ export default function HistoryPage() {
         </Link>
       </Topbar>
 
-      <main className="mx-auto max-w-7xl px-5 py-7">
+      <main className="w-full px-5 py-7">
         <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-teal">
@@ -740,7 +740,7 @@ function SelectionBar({
 }) {
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white/95 shadow-[0_-4px_20px_rgba(0,0,0,0.08)] backdrop-blur-sm">
-      <div className="mx-auto flex max-w-7xl items-center gap-4 px-5 py-4">
+      <div className="flex w-full items-center gap-4 px-5 py-4">
         <div className="min-w-0 flex-1">
           {selectedCount === 0 ? (
             <p className="text-sm text-ink/50">Select runs from the list above to compare or delete them.</p>

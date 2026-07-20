@@ -67,10 +67,13 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
   const [focused, setFocused] = useState<StageId | null>(null);
   const [selectedProgramIdx, setSelectedProgramIdx] = useState(0);
   const [, setTick] = useState(0);
-  const [leftPct, setLeftPct] = useState(34);
+  const [leftPct, setLeftPct] = useState<number | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
   const isDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // px floor for the left rail, kept in a ref so the drag listener never reads
+  // a stale value when the run switches between single and comparison mode.
+  const minLeftPx = useRef(284);
 
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -92,7 +95,8 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
       if (!isDragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const raw = ((e.clientX - rect.left) / rect.width) * 100;
-      setLeftPct(Math.min(65, Math.max(18, raw)));
+      const minPct = (minLeftPx.current / rect.width) * 100;
+      setLeftPct(Math.min(65, Math.max(minPct, raw)));
     };
     const onUp = () => {
       if (!isDragging.current) return;
@@ -152,6 +156,21 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
 
   const isComparison = state.mode === "compare";
   const compRun = state.comparison_run;
+
+  // Left rail is a compact status/nav panel. The pipeline graph renders
+  // fixed-width nodes (NODE_W=248), so the floor is that plus gutters — and in
+  // comparison mode also the program list beside it. Once the user drags the
+  // divider their explicit choice (leftPct) wins.
+  const showsProgramList = isComparison && !!compRun && compRun.total_programs >= 2;
+  // Width is set by the StatusBar header, not the graph: the metadata row
+  // (id, mode, timings) plus the status badge needs ~480px of content box in
+  // comparison mode to stay on one line, ~390px in single mode. Everything
+  // below adds the px-4 gutters on top of that.
+  const defaultLeftWidth = showsProgramList
+    ? "clamp(520px, 30%, 536px)"
+    : "clamp(424px, 25%, 440px)";
+  const leftWidth = leftPct === null ? defaultLeftWidth : `${leftPct}%`;
+  minLeftPx.current = showsProgramList ? 520 : 424;
 
   // Current program info for comparison header
   const currentProgramIdx = compRun?.current_program_index ?? 0;
@@ -273,7 +292,7 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
         {/* LEFT: pipeline graph + status */}
         <div
           className="flex min-h-0 flex-col border-b border-line bg-white lg:border-b-0 flex-shrink-0"
-          style={isDesktop ? { width: `${leftPct}%` } : undefined}
+          style={isDesktop ? { width: leftWidth } : undefined}
         >
           <StatusBar state={state} displayState={displayState} doneCount={doneCount} pct={pct} />
 
@@ -401,7 +420,7 @@ export default function RunPage({ params }: { params: { run_id: string } }) {
 
         {/* RIGHT: stage detail */}
         <div className="min-h-0 flex-1 overflow-y-auto scroll-thin bg-canvas px-4 py-5 sm:px-5 lg:px-7 lg:py-6">
-          <div className="mx-auto max-w-4xl space-y-5">
+          <div className="w-full space-y-5">
 
             {/* ── Comparison queue panel ── */}
             {isComparison && compRun && (
@@ -965,7 +984,7 @@ function Shell({ children }: { children: React.ReactNode }) {
           </Button>
         </Link>
       </Topbar>
-      <div className="mx-auto max-w-5xl px-5">{children}</div>
+      <div className="w-full px-5">{children}</div>
     </div>
   );
 }

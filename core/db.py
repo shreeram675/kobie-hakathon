@@ -21,6 +21,8 @@ DDL = (
         program_name_normalized TEXT PRIMARY KEY,
         program_name TEXT NOT NULL,
         brand TEXT,
+        brand_normalized TEXT,
+        official_domain TEXT,
         country_or_region TEXT,
         program_state_json TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -231,7 +233,70 @@ def migrate(conn: DBConnection) -> None:
         }
         if "run_state_json" not in existing_cols:
             conn.execute("ALTER TABLE runs ADD COLUMN run_state_json TEXT")
+
+        # Canonical identity columns on run_snapshots (brand + official domain),
+        # so cache lookups survive the validator resolving a different program
+        # name for the same underlying program.
+        snapshot_cols = {row[1] for row in conn.execute("PRAGMA table_info(run_snapshots)").fetchall()}
+        added_identity_cols = False
+        for col in ("brand_normalized", "official_domain"):
+            if col not in snapshot_cols:
+                conn.execute(f"ALTER TABLE run_snapshots ADD COLUMN {col} TEXT")
+                added_identity_cols = True
+        if added_identity_cols:
+            _backfill_snapshot_identity(conn)
         conn.commit()
+
+
+def _backfill_snapshot_identity(conn: DBConnection) -> None:
+    """Populate brand_normalized/official_domain on pre-existing snapshot rows."""
+    rows = conn.execute(
+        "SELECT program_name_normalized, brand, program_state_json FROM run_snapshots"
+    ).fetchall()
+    for row in rows:
+        brand = row["brand"]
+        official_domain = None
+        try:
+            state = json.loads(row["program_state_json"])
+            identity = state.get("program_identity") or (
+                (state.get("validation_result") or {}).get("identity") or {}
+            )
+            brand = brand or identity.get("brand") or state.get("brand")
+            official_domain = identity.get("official_domain")
+        except Exception:
+            pass
+        conn.execute(
+            "UPDATE run_snapshots SET brand_normalized = ?, official_domain = ? "
+            "WHERE program_name_normalized = ?",
+            (_norm_text(brand), _norm_domain(official_domain), row["program_name_normalized"]),
+        )
+
+
+_BRAND_SUFFIXES = {
+    "inc", "inc.", "llc", "ltd", "ltd.", "corp", "corp.", "corporation",
+    "co", "co.", "company", "holdings", "group", "plc", "gmbh",
+}
+
+
+def _norm_text(value: str | None) -> str | None:
+    """Normalise a brand for matching: lowercase, strip trailing corporate suffixes
+    so e.g. "Cinemark Holdings" and "Cinemark" key to the same brand."""
+    if not value:
+        return None
+    words = value.lower().strip().replace(",", " ").split()
+    while len(words) > 1 and words[-1] in _BRAND_SUFFIXES:
+        words.pop()
+    return " ".join(words) or None
+
+
+def _norm_domain(value: str | None) -> str | None:
+    """Normalise an official domain to its bare host (no scheme/www/path)."""
+    if not value:
+        return None
+    domain = value.lower().strip()
+    domain = domain.removeprefix("https://").removeprefix("http://").removeprefix("www.")
+    domain = domain.split("/", 1)[0].strip()
+    return domain or None
 
 
 def upsert_run(
@@ -383,6 +448,7 @@ def save_program_snapshot(
     country_or_region: str | None,
     program_state_json: str,
     created_at: str | None = None,
+    official_domain: str | None = None,
 ) -> None:
     """Upsert a completed program-analysis snapshot keyed by normalised program name."""
     if created_at is None:
@@ -392,16 +458,20 @@ def save_program_snapshot(
         conn.execute(
             """
             INSERT INTO run_snapshots
-                (program_name_normalized, program_name, brand, country_or_region, program_state_json, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (program_name_normalized, program_name, brand, brand_normalized,
+                 official_domain, country_or_region, program_state_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(program_name_normalized) DO UPDATE SET
                 program_name=excluded.program_name,
                 brand=excluded.brand,
+                brand_normalized=excluded.brand_normalized,
+                official_domain=excluded.official_domain,
                 country_or_region=excluded.country_or_region,
                 program_state_json=excluded.program_state_json,
                 created_at=excluded.created_at
             """,
-            (normalized, program_name, brand, country_or_region, program_state_json, created_at),
+            (normalized, program_name, brand, _norm_text(brand),
+             _norm_domain(official_domain), country_or_region, program_state_json, created_at),
         )
         conn.commit()
         try:
@@ -410,10 +480,18 @@ def save_program_snapshot(
             pass
 
 
-def find_program_snapshot(conn: DBConnection, query: str) -> dict | None:
-    """Return the most-recent snapshot row for a program query, or None.
+def find_program_snapshot(
+    conn: DBConnection,
+    query: str,
+    brand: str | None = None,
+    official_domain: str | None = None,
+) -> dict | None:
+    """Return the most-recent snapshot row for a program identity, or None.
 
-    Matching order: exact normalised name → stored name contains query → query words all appear in stored name.
+    Matching order: exact normalised program name → canonical official domain →
+    normalised brand. Domain/brand matches let a cache hit survive the validator
+    resolving a different program name for the same underlying program; callers
+    surface hits to the user for confirmation rather than reusing them silently.
     """
     normalized = query.lower().strip()
 
@@ -424,24 +502,57 @@ def find_program_snapshot(conn: DBConnection, query: str) -> dict | None:
     if row:
         return dict(row)
 
-    row = conn.execute(
-        "SELECT * FROM run_snapshots WHERE program_name_normalized LIKE ? ORDER BY created_at DESC LIMIT 1",
-        (f"%{normalized}%",),
-    ).fetchone()
-    if row:
-        return dict(row)
-
-    words = [w for w in normalized.split() if len(w) > 2]
-    if words:
-        like_clause = " AND ".join("program_name_normalized LIKE ?" for _ in words)
+    domain_norm = _norm_domain(official_domain)
+    if domain_norm:
         row = conn.execute(
-            f"SELECT * FROM run_snapshots WHERE {like_clause} ORDER BY created_at DESC LIMIT 1",
-            [f"%{w}%" for w in words],
+            "SELECT * FROM run_snapshots WHERE official_domain = ? ORDER BY created_at DESC LIMIT 1",
+            (domain_norm,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+    brand_norm = _norm_text(brand)
+    if brand_norm:
+        row = conn.execute(
+            "SELECT * FROM run_snapshots WHERE brand_normalized = ? ORDER BY created_at DESC LIMIT 1",
+            (brand_norm,),
         ).fetchone()
         if row:
             return dict(row)
 
     return None
+
+
+def find_close_program_snapshots(
+    conn: DBConnection, query: str, limit: int = 3, cutoff: float = 0.75
+) -> list[dict]:
+    """Fuzzy-match a (possibly misspelled) query against stored snapshot names/brands.
+
+    Returns snapshot rows ordered by similarity, excluding exact matches —
+    used to offer \"did you mean …?\" clarifications, never to reuse silently.
+    """
+    import difflib
+
+    normalized = query.lower().strip()
+    if not normalized:
+        return []
+
+    rows = conn.execute(
+        "SELECT * FROM run_snapshots ORDER BY created_at DESC"
+    ).fetchall()
+    scored: list[tuple[float, dict]] = []
+    for row in rows:
+        candidates = [row["program_name_normalized"]]
+        brand_norm = row["brand_normalized"] if "brand_normalized" in row.keys() else None
+        if brand_norm:
+            candidates.append(brand_norm)
+        score = max(
+            difflib.SequenceMatcher(None, normalized, c).ratio() for c in candidates
+        )
+        if score >= cutoff and normalized != row["program_name_normalized"]:
+            scored.append((score, dict(row)))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [row for _, row in scored[:limit]]
 
 
 def list_program_snapshots(conn: DBConnection, limit: int = 100) -> list[dict]:

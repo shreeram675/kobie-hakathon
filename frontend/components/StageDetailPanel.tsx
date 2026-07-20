@@ -18,7 +18,7 @@ import { DataQualityGauge } from "./charts/DataQualityGauge";
 import { Donut } from "./charts/Donut";
 import { SourceTypePie } from "./charts/SourceTypePie";
 import { UrlScoreHistogram } from "./charts/UrlScoreHistogram";
-import { TokenBarChart } from "./charts/TokenBarChart";
+import { ChunkSummary } from "./charts/ChunkSummary";
 import { FieldCoverageStackedBar } from "./charts/FieldCoverageStackedBar";
 import { ComparisonBars } from "./charts/ComparisonBars";
 import { TOKENS } from "@/lib/colors";
@@ -59,14 +59,6 @@ export function StageDetailPanel({
     0,
   );
   const extractionChunks = state.extraction_chunks ?? [];
-  const avgTokens = extractionChunks.length
-    ? Math.round(
-        extractionChunks.reduce(
-          (s, c) => s + (c.token_count ?? estimateTokens(c.chunk_text)),
-          0,
-        ) / extractionChunks.length,
-      )
-    : 0;
 
   return (
     <div className="space-y-7">
@@ -274,18 +266,19 @@ export function StageDetailPanel({
       <StageSection stageId="chunking" status={status(state, "chunking")}>
         <div className="space-y-4">
           <StatRow
+            columns={3}
             items={[
               { label: "Semantic chunks", value: (state.semantic_chunks ?? []).length, tone: "navy" },
               { label: "Extraction chunks", value: extractionChunks.length, tone: "teal" },
-              { label: "Skipped chunks", value: (state.skipped_chunks ?? []).length, tone: "grey" },
-              { label: "Total tokens", value: compact(tokensTotal), tone: "blue", hint: `~${avgTokens} avg / chunk` },
+              { label: "Total tokens", value: compact(tokensTotal), tone: "blue" },
             ]}
           />
           <div className="rounded-card border border-line p-3">
-            <p className="mb-2 text-xs font-semibold text-ink/55">
-              Tokens per extraction chunk
-            </p>
-            <TokenBarChart chunks={extractionChunks} />
+            <ChunkSummary
+              chunks={extractionChunks}
+              semanticCount={(state.semantic_chunks ?? []).length}
+              skippedCount={(state.skipped_chunks ?? []).length}
+            />
           </div>
         </div>
       </StageSection>

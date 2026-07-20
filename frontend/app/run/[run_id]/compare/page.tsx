@@ -144,7 +144,7 @@ export default function ComparePage({ params }: { params: { run_id: string } }) 
     if (state.comparison_brief) {
       return (
         <Frame runId={runId}>
-          <div className="mx-auto max-w-[1500px] space-y-4 px-5 py-7">
+          <div className="w-full space-y-4 px-5 py-7">
             <div className="rounded-card border border-amber/30 bg-amber/5 px-4 py-3 text-sm text-ink/70">
               This archived comparison was loaded from history. The detailed second-program snapshot was not
               persisted, so the side-by-side table is unavailable for this older run.
@@ -210,7 +210,7 @@ function TwoProgramView({ runId, state }: { runId: string; state: AgentState }) 
   };
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6 px-5 py-7">
+    <div className="w-full space-y-6 px-5 py-7">
       <CompareHeader programs={[programA, programB]} />
 
       {/* quality cards */}
@@ -575,7 +575,7 @@ function MultiProgramView({
   const bestProgram = completedEntries[bestIdx]?.prog ?? programs[0];
 
   return (
-    <div className="mx-auto max-w-[1500px] space-y-6 px-5 py-7">
+    <div className="w-full space-y-6 px-5 py-7">
       <CompareHeader programs={programs} />
 
       {/* Quality gauges row */}

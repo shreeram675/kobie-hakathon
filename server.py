@@ -39,6 +39,8 @@ from core.schemas import (
     Claim,
     AgentState,
     BriefOutput,
+    ClarificationOption,
+    ValidationResult,
     FieldReport,
     FieldReportEntry,
     FirecrawlScrapeOutput,
@@ -153,6 +155,9 @@ class RunRecord:
         self.cache_decision_event = threading.Event()
         self.cache_decision: str | None = None  # "use_cache" | "fresh"
         self.pending_cache_snapshot: dict | None = None
+        # Set when the user chose "use_cache" for the current compare-mode
+        # program; run_pipeline restores from it instead of saving fresh state.
+        self.cache_restored_snapshot: dict | None = None
         self.stop_event = threading.Event()
         self._program_cost_baseline: dict[str, Any] | None = None
         # Wall-clock bounds of the whole run, independent of record.state
@@ -310,6 +315,58 @@ def _snapshot_meta(snapshot: dict) -> dict[str, Any]:
     }
 
 
+def _official_domain_from_state(state: dict[str, Any]) -> str | None:
+    """Pull the validator-resolved official domain out of a live or serialized state."""
+    identity: Any = state.get("program_identity")
+    if identity is None:
+        vr = state.get("validation_result")
+        identity = getattr(vr, "identity", None) if vr is not None else None
+        if identity is None and isinstance(vr, dict):
+            identity = vr.get("identity")
+    if identity is None:
+        return None
+    if isinstance(identity, dict):
+        return identity.get("official_domain")
+    return getattr(identity, "official_domain", None)
+
+
+def _typo_clarification(user_input: str) -> ValidationResult | None:
+    """Offer previously-analysed programs as "did you mean …?" options for a
+    rejected input that fuzzy-matches their names (e.g. "regal clown club")."""
+    try:
+        close = _db.find_close_program_snapshots(_db_conn, user_input)
+    except Exception:
+        logger.exception("fuzzy snapshot lookup failed for %r", user_input)
+        return None
+    if not close:
+        return None
+    options: list[ClarificationOption] = []
+    for row in close:
+        domain = "Other"
+        try:
+            snap_state = json.loads(row.get("program_state_json") or "{}")
+            domain = snap_state.get("domain") or "Other"
+        except Exception:
+            pass
+        options.append(
+            ClarificationOption(
+                program_name=row.get("program_name") or "",
+                brand=row.get("brand") or row.get("program_name") or "",
+                domain=domain,
+                official_domain=row.get("official_domain"),
+            )
+        )
+    names = ", ".join(o.program_name for o in options)
+    return ValidationResult(
+        status="needs_clarification",
+        confidence=0.5,
+        possible_matches=options,
+        follow_up_questions=[
+            f"I couldn't identify \"{user_input}\" as a loyalty program. Did you mean {names}?"
+        ],
+    )
+
+
 def _save_program_snapshot_to_db(program_name: str, brand: str | None,
                                   country_or_region: str | None,
                                   program_state: dict[str, Any]) -> None:
@@ -344,6 +401,7 @@ def _save_program_snapshot_to_db(program_name: str, brand: str | None,
             country_or_region,
             json.dumps(program_state, default=str),
             now_iso(),
+            official_domain=_official_domain_from_state(program_state),
         )
         logger.info("Saved snapshot for %s (quality %.3f)", program_name, new_quality)
     except Exception:
@@ -408,6 +466,14 @@ def _restore_single_from_cache(record: RunRecord, snapshot: dict) -> None:
     cached["mode"] = "single"
     cached["active_stage"] = None
     cached["status"] = "done"
+    # This run happened now; the snapshot's own date stays visible via cache_hit.
+    cached["created_at"] = record.run_started_at
+    cached["updated_at"] = now_iso()
+    cached["cache_hit"] = {
+        "program_name": program_name,
+        "brand": program_state.get("brand"),
+        "run_date": snapshot.get("created_at"),
+    }
     cached["conversation"] = [
         {
             "role": "assistant",
@@ -671,7 +737,14 @@ def _run_single_pipeline(record: RunRecord) -> bool:
         if vr and vr.status == "resolved":
             _mark(record, "input_validator", "done")
             break
-        elif vr and vr.status == "needs_clarification" and clarification_count < 3:
+        if vr and vr.status == "rejected" and clarification_count < 3:
+            # A typo of a previously-analysed program shouldn't dead-end the
+            # run — offer the close matches as a clarification instead.
+            suggestion = _typo_clarification(state.get("user_input") or record.user_input)
+            if suggestion is not None:
+                vr = suggestion
+                state = _apply(record, {"validation_result": vr})
+        if vr and vr.status == "needs_clarification" and clarification_count < 3:
             clarification_count += 1
             with record.lock:
                 record.run_status = "clarification_needed"
@@ -687,10 +760,17 @@ def _run_single_pipeline(record: RunRecord) -> bool:
             _mark(record, "input_validator", "error")
             return False
 
-    # 1b. Cache check — now that we know the resolved program name
+    # 1b. Cache check — keyed on the resolved canonical identity (program name,
+    # then official domain, then brand), so a differently-worded resolution of
+    # the same program still surfaces the stored analysis. Always asks the user.
     if not record.force_fresh:
         resolved_name = record.state.get("program_name") or record.user_input
-        snapshot = _db.find_program_snapshot(_db_conn, resolved_name)
+        snapshot = _db.find_program_snapshot(
+            _db_conn,
+            resolved_name,
+            brand=record.state.get("brand"),
+            official_domain=_official_domain_from_state(record.state),
+        )
         if snapshot:
             with record.lock:
                 record.pending_cache_snapshot = snapshot
@@ -703,12 +783,15 @@ def _run_single_pipeline(record: RunRecord) -> bool:
                 return False
             with record.lock:
                 decision = record.cache_decision
+                record.pending_cache_snapshot = None
                 record.run_status = "running"
             if decision == "use_cache":
-                with record.lock:
-                    snap = record.pending_cache_snapshot
-                if snap:
-                    _restore_single_from_cache(record, snap)
+                if record.mode == "compare":
+                    # run_pipeline's compare loop restores this program's slot
+                    # from the snapshot instead of saving fresh state.
+                    record.cache_restored_snapshot = snapshot
+                else:
+                    _restore_single_from_cache(record, snapshot)
                     _persist_run_summary(record)
                 return True
 
@@ -867,6 +950,8 @@ def _reset_record_for_program(record: RunRecord, prog: str, index: int) -> None:
         record.state = fresh
         record.stage_status = {s: "idle" for s in UI_STAGES}
         record.active_stage = None
+        record.cache_restored_snapshot = None
+        record.pending_cache_snapshot = None
         # Snapshot the shared cost ledger so this program's report only
         # reflects calls made while it was running, not earlier programs'.
         record._program_cost_baseline = record.cost_ledger.snapshot()
@@ -904,19 +989,22 @@ def run_pipeline(record: RunRecord) -> None:
                             record.program_statuses[j] = "error"
                 break
 
-            # Per-program cache check for compare mode
-            if not record.force_fresh:
-                snapshot = _db.find_program_snapshot(_db_conn, prog)
-                if snapshot:
-                    _restore_compare_program_from_cache(
-                        record, i, prog, snapshot, all_claims, all_names, all_field_reports
-                    )
-                    any_success = True
-                    continue
-
             _reset_record_for_program(record, prog, i)
             cost_tracker.set_active_run_id(record.run_id)
             success = _run_single_pipeline(record)
+
+            # Cache reuse goes through the same post-validation popup as single
+            # mode; on "use_cache" the pipeline hands the snapshot back here.
+            if success and record.cache_restored_snapshot is not None:
+                _restore_compare_program_from_cache(
+                    record, i, prog, record.cache_restored_snapshot,
+                    all_claims, all_names, all_field_reports,
+                )
+                with record.lock:
+                    record.cache_restored_snapshot = None
+                any_success = True
+                continue
+
             with record.lock:
                 all_field_reports[i] = record.state.get("field_report")
             _save_program_result(record, i, success, all_claims, all_names)
@@ -938,6 +1026,10 @@ def run_pipeline(record: RunRecord) -> None:
                 state_a = record.program_states[done_indices[0]]
                 if state_a is not None:
                     record.state = dict(state_a)
+                    # state_a may be a cache snapshot carrying the original
+                    # analysis date — the run itself is timestamped by this run.
+                    record.state["created_at"] = record.run_started_at
+                    record.state["updated_at"] = now_iso()
 
             # Generate LLM comparison brief from all completed field reports
             try:

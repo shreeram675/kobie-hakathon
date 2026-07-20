@@ -37,17 +37,17 @@ const PROGRAM_COLORS = [
 const MODE_DETAIL: Record<RunMode, { title: string; sub: string; cta: string }> = {
   single: {
     title: "Single Program Analysis",
-    sub: "Full pipeline: identity resolution → web retrieval → claim extraction → conflict adjudication → analyst brief.",
+    sub: "Get a verified brief on any loyalty program, with conflicting claims flagged and resolved.",
     cta: "Run analysis",
   },
   compare: {
     title: "Side-by-Side Comparison",
-    sub: "Run each program sequentially through the full pipeline, then surface a field-by-field comparison with insights.",
+    sub: "Compare two loyalty programs field-by-field, backed by verified sources and surfaced insights.",
     cta: "Run comparison",
   },
   converse: {
     title: "Analyse & Chat",
-    sub: "Full extraction first, then ask grounded follow-up questions against verified claims.",
+    sub: "Get a verified brief, then ask grounded follow-up questions against the underlying claims.",
     cta: "Analyse & open chat",
   },
 };
@@ -134,7 +134,7 @@ export default function HomePage() {
             <span className="h-1.5 w-1.5 rounded-full bg-[#F47920] animate-pulse" />
             Loyalty Intelligence Platform
             <span className="mx-0.5 text-white/25">·</span>
-            <span className="text-white/40">AI-powered, source-verified</span>
+            <span className="text-white/40">AI-powered research</span>
           </div>
 
           <h1 className="text-balance text-3xl sm:text-[2.4rem] font-bold tracking-[-0.02em] leading-[1.15] mb-4 bg-gradient-to-b from-white via-white to-white/70 bg-clip-text text-transparent">

@@ -17,7 +17,7 @@ export function Topbar({
         className,
       )}
     >
-      <div className="mx-auto flex h-16 max-w-[1600px] items-center justify-between gap-4 px-5">
+      <div className="flex h-16 w-full items-center justify-between gap-4 px-5">
         <Logo />
         <div className="flex items-center gap-3">{children}</div>
       </div>

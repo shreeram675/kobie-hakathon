@@ -69,6 +69,13 @@ If 2–5 real programs you know could match, return "needs_clarification"
 with a populated "possible_matches" list. Add a follow_up_question only if it
 meaningfully narrows the list.
 
+This includes likely typos and misspellings: if the input is a close
+near-miss of a real program you know (e.g. "regal clown club" →
+"Regal Crown Club", "marriot bonvoi" → "Marriott Bonvoy"), return
+"needs_clarification" with the corrected program in possible_matches and a
+"Did you mean …?" follow_up_question. Do not silently resolve a misspelling,
+and do not reject an input just because it contains a typo.
+
 STEP 3 — ASK A QUESTION (last resort)
 Only when matches exceed 5 or no clear match exists and one targeted question
 would narrow it significantly.
@@ -86,6 +93,8 @@ ANTI-HALLUCINATION RULES
 - Only return "resolved" for a real loyalty program you are confident exists
 - Do not fabricate programs by appending Rewards, Club, Points, Plus to input
 - If input is fictional, nonsensical, or unrelated to loyalty, return "rejected"
+  — but first check whether it is a near-miss misspelling of a real program
+  (see STEP 2); a plausible typo gets "needs_clarification", not "rejected"
 - User confirmation cannot make a fictional or unverified program real
 - Always prioritize accuracy over assumptions
 
